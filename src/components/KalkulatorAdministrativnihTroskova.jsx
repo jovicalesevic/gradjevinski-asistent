@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import axios from 'axios'
+import { PieChart, Pie, Cell, ResponsiveContainer, Legend, Tooltip } from 'recharts'
 
 const EUR_TO_RSD = 117
 const REPUBLICKA_TAKSA_ZAHTEV = 900
@@ -8,6 +9,8 @@ const DOPRINOS_GRADSKO_ZEMLJISTE_PO_M2 = 2000
 
 const inputClasses =
   'w-full px-4 py-3 rounded-lg border border-slate-200 bg-white text-slate-700 shadow-sm focus:ring-2 focus:ring-sky-500 focus:border-sky-500 transition-shadow outline-none'
+
+const CHART_COLORS = ['#0088FE', '#00C49F', '#D35400', '#8884d8']
 
 export default function KalkulatorAdministrativnihTroskova({ isLoggedIn, objectType, workType, municipality, onCalculationSaved }) {
   const [kvadratura, setKvadratura] = useState('')
@@ -28,6 +31,12 @@ export default function KalkulatorAdministrativnihTroskova({ isLoggedIn, objectT
   ]
 
   const ukupno = troskovi.reduce((sum, t) => sum + t.iznos, 0)
+
+  const chartData = troskovi.map((item) => ({
+    name: item.vrsta,
+    value: item.iznos,
+  }))
+  console.log('Chart Data:', chartData)
 
   const [saving, setSaving] = useState(false)
 
@@ -182,14 +191,56 @@ export default function KalkulatorAdministrativnihTroskova({ isLoggedIn, objectT
         </table>
       </div>
 
-      <div className="mt-6 p-6 rounded-xl bg-blue-50 border border-blue-100">
-        <p className="text-sm font-medium text-slate-600 mb-1">
-          Ukupno procenjeni troškovi
-        </p>
-        <p className="text-2xl font-bold text-slate-800 tabular-nums">
-          {ukupno.toLocaleString('sr-RS')} RSD
-        </p>
-      </div>
+      {troskovi.length > 0 && (
+        <div className="mt-6 flex flex-col lg:flex-row gap-6 items-stretch lg:items-center">
+          <div className="flex-1 min-h-[300px] rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+            <ResponsiveContainer width="100%" height={300}>
+              <PieChart>
+                <Pie
+                  data={chartData}
+                  cx="50%"
+                  cy="50%"
+                  innerRadius={50}
+                  outerRadius={90}
+                  paddingAngle={2}
+                  dataKey="value"
+                  label={({ percent }) => `${(percent * 100).toFixed(1)}%`}
+                >
+                  {chartData.map((_, i) => (
+                    <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} stroke="#fff" strokeWidth={2} />
+                  ))}
+                </Pie>
+                <Tooltip
+                  formatter={(value) => `${Number(value).toLocaleString('sr-RS')} RSD`}
+                  contentStyle={{ borderRadius: '8px', border: '1px solid #e2e8f0' }}
+                />
+                <Legend
+                  wrapperStyle={{ fontWeight: 600, fontSize: 15, color: '#0f172a' }}
+                />
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+          <div className="lg:w-80 shrink-0 p-6 rounded-xl bg-blue-50 border border-blue-100">
+            <p className="text-sm font-medium text-slate-600 mb-1">
+              Ukupno procenjeni troškovi
+            </p>
+            <p className="text-2xl font-bold text-slate-800 tabular-nums">
+              {ukupno.toLocaleString('sr-RS')} RSD
+            </p>
+          </div>
+        </div>
+      )}
+
+      {ukupno === 0 && (
+        <div className="mt-6 p-6 rounded-xl bg-blue-50 border border-blue-100">
+          <p className="text-sm font-medium text-slate-600 mb-1">
+            Ukupno procenjeni troškovi
+          </p>
+          <p className="text-2xl font-bold text-slate-800 tabular-nums">
+            {ukupno.toLocaleString('sr-RS')} RSD
+          </p>
+        </div>
+      )}
 
       {isLoggedIn && (
         <div className="mt-6 flex justify-center">

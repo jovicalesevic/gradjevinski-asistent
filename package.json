@@ -4,6 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
+    "postinstall": "node scripts/copy-font.js",
     "backend": "node backend/server.js",
     "dev": "vite",
     "build": "vite build",
@@ -16,9 +17,14 @@
     "cors": "^2.8.6",
     "dotenv": "^17.3.1",
     "express": "^5.2.1",
+    "html2canvas": "^1.4.1",
+    "jspdf": "^4.2.1",
+    "jspdf-autotable": "^5.0.7",
     "mongoose": "^9.3.1",
     "react": "^19.2.4",
-    "react-dom": "^19.2.4"
+    "react-dom": "^19.2.4",
+    "recharts": "^3.8.0",
+    "roboto-regular": "^1.0.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.4",
