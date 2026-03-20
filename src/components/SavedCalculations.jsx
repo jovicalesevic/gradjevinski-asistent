@@ -4,10 +4,11 @@ import { jsPDF } from 'jspdf'
 import autoTable from 'jspdf-autotable'
 import html2canvas from 'html2canvas'
 import { PieChart, Pie, Cell, ResponsiveContainer, Legend } from 'recharts'
+import { API_USER_BASE } from '../config/api.js'
 
 const CHART_COLORS = ['#0088FE', '#00C49F', '#D35400', '#8884d8']
 
-const API_BASE = 'http://localhost:5000/api/user'
+const API_BASE = API_USER_BASE
 
 const sumAdministrativeItems = (calc) => {
   const items = Array.isArray(calc?.items) ? calc.items : []
@@ -402,7 +403,10 @@ export default function SavedCalculations({ isLoggedIn, refreshTrigger = 0 }) {
 
   if (loading) {
     return (
-      <section className="px-4 sm:px-6 py-12 max-w-2xl mx-auto">
+      <section
+        id="arhiva-proracuna"
+        className="px-4 sm:px-6 py-12 max-w-2xl mx-auto scroll-mt-20"
+      >
         <h2 className="text-2xl font-bold text-slate-800 mb-6 text-center">
           Moja arhiva proračuna
         </h2>
@@ -412,7 +416,10 @@ export default function SavedCalculations({ isLoggedIn, refreshTrigger = 0 }) {
   }
 
   return (
-    <section className="px-4 sm:px-6 py-12 max-w-2xl mx-auto">
+    <section
+      id="arhiva-proracuna"
+      className="px-4 sm:px-6 py-12 max-w-2xl mx-auto scroll-mt-20"
+    >
       <h2 className="text-2xl font-bold text-slate-800 mb-6 text-center">
         Moja arhiva proračuna
       </h2>

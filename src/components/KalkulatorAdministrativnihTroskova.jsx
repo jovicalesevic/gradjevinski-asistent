@@ -1,5 +1,6 @@
 import { useState, useMemo } from 'react'
 import axios from 'axios'
+import { API_USER_BASE } from '../config/api.js'
 import { PieChart, Pie, Cell, ResponsiveContainer, Legend, Tooltip } from 'recharts'
 
 const EUR_TO_RSD = 117
@@ -104,7 +105,7 @@ export default function KalkulatorAdministrativnihTroskova({ isLoggedIn, objectT
         total,
       }))
 
-      await axios.post('http://localhost:5000/api/user/save-calculation', {
+      await axios.post(`${API_USER_BASE}/save-calculation`, {
         email,
         title,
         totalAmount: ukupnoProjekat,

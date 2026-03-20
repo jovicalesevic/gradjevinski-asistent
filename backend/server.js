@@ -12,7 +12,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.join(__dirname, '.env') });
 
 const app = express();
-const PORT = process.env.PORT || 5000;
+// Render and other hosts assign PORT via environment
+const PORT = Number(process.env.PORT) || 5000;
 
 app.use((req, res, next) => {
   console.log('Received request:', req.method, req.url);

@@ -1,11 +1,12 @@
 import { useState } from 'react'
 import axios from 'axios'
 import Modal from './Modal'
+import { API_AUTH_BASE } from '../config/api.js'
 
 const inputClasses =
   'w-full px-4 py-3 rounded-lg border border-slate-200 bg-white text-slate-700 shadow-sm focus:ring-2 focus:ring-sky-500 focus:border-sky-500 transition-shadow outline-none'
 
-const API_BASE = 'http://localhost:5000/api/auth'
+const API_BASE = API_AUTH_BASE
 
 export default function LoginModal({ onClose, onLoginSuccess }) {
   const [email, setEmail] = useState('')
