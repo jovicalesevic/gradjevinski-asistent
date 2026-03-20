@@ -9,6 +9,32 @@ const CHART_COLORS = ['#0088FE', '#00C49F', '#D35400', '#8884d8']
 
 const API_BASE = 'http://localhost:5000/api/user'
 
+const sumAdministrativeItems = (calc) => {
+  const items = Array.isArray(calc?.items) ? calc.items : []
+  return items.reduce(
+    (s, item) => s + Number(item.iznos ?? item.amount ?? item.cost ?? 0),
+    0
+  )
+}
+
+const sumMaterialsLines = (calc) => {
+  const mats = Array.isArray(calc?.materials) ? calc.materials : []
+  return mats.reduce((s, m) => s + Number(m.total ?? 0), 0)
+}
+
+const sumAdminFromCalc = (calc) => {
+  const items = Array.isArray(calc.items) ? calc.items : []
+  return items.reduce(
+    (s, item) => s + Number(item.iznos ?? item.amount ?? item.cost ?? 0),
+    0
+  )
+}
+
+const sumMaterialsFromCalc = (calc) => {
+  const mats = Array.isArray(calc.materials) ? calc.materials : []
+  return mats.reduce((s, m) => s + Number(m.total ?? 0), 0)
+}
+
 // Format date for PDF with Europe/Belgrade timezone (local time)
 const formatPdfDate = (dateStr) => {
   if (!dateStr) return ''
@@ -71,6 +97,7 @@ const generatePDF = async (calculation, userEmail, chartImageBase64 = null) => {
 
     const doc = new jsPDF()
     const items = Array.isArray(calculation.items) ? calculation.items : []
+    const materials = Array.isArray(calculation.materials) ? calculation.materials : []
     const pageWidth = doc.internal.pageSize.getWidth()
     const margin = 14
 
@@ -96,17 +123,21 @@ const generatePDF = async (calculation, userEmail, chartImageBase64 = null) => {
     doc.text(text('Investitor: ' + (userEmail || '')), margin, 24)
     doc.text(text('Datum: ' + currentDateTime), margin, 31)
 
-    const tableData = items.map((item) => {
+    const adminRows = items.map((item) => {
       const label = item.vrsta ?? item.name ?? item.label ?? ''
       const amount = item.iznos ?? item.amount ?? item.cost ?? 0
       return [text(String(label)), Number(amount).toLocaleString('sr-RS')]
     })
-    tableData.push([text('Ukupan iznos'), Number(calculation.totalAmount || 0).toLocaleString('sr-RS')])
+    const adminSubtotal = sumAdministrativeItems(calculation)
+    const adminBody = [
+      ...adminRows,
+      [text('Ukupno administracija'), Number(adminSubtotal).toLocaleString('sr-RS')],
+    ]
 
     autoTable(doc, {
       startY: 38,
-      head: [[text('Stavka'), text('Iznos (RSD)')]],
-      body: tableData,
+      head: [[text('Administrativne stavke'), text('Iznos (RSD)')]],
+      body: adminBody,
       theme: 'grid',
       styles: { font: fontName, fontStyle: 'normal' },
       headStyles: { fillColor: [71, 85, 105], font: fontName, fontStyle: 'normal' },
@@ -117,7 +148,7 @@ const generatePDF = async (calculation, userEmail, chartImageBase64 = null) => {
       },
       margin: { left: margin, right: margin },
       didParseCell: (data) => {
-        if (data.row.index === tableData.length - 1) {
+        if (data.row.index === adminBody.length - 1) {
           data.cell.styles.fillColor = [226, 232, 240]
           data.cell.styles.font = fontName
           data.cell.styles.fontStyle = 'normal'
@@ -126,6 +157,60 @@ const generatePDF = async (calculation, userEmail, chartImageBase64 = null) => {
     })
 
     let currentY = doc.lastAutoTable?.finalY ?? 38
+
+    if (materials.length > 0) {
+      const matBody = materials.map((m) => [
+        text(String(m.name || '')),
+        text(String(m.unit || '—')),
+        Number(m.quantity ?? 0).toLocaleString('sr-RS'),
+        Number(m.unitPrice ?? 0).toLocaleString('sr-RS'),
+        Number(m.total ?? 0).toLocaleString('sr-RS'),
+      ])
+      const matSum = sumMaterialsLines(calculation)
+      matBody.push([
+        text('Ukupno materijal'),
+        '',
+        '',
+        '',
+        Number(matSum).toLocaleString('sr-RS'),
+      ])
+      currentY += 8
+      autoTable(doc, {
+        startY: currentY,
+        head: [[text('Materijal'), text('Jm'), text('Kol.'), text('Cena'), text('Ukupno')]],
+        body: matBody,
+        theme: 'grid',
+        styles: { font: fontName, fontStyle: 'normal', fontSize: 8 },
+        headStyles: { fillColor: [100, 116, 139], font: fontName, fontStyle: 'normal' },
+        bodyStyles: { font: fontName, fontStyle: 'normal' },
+        columnStyles: {
+          0: { cellWidth: 55, font: fontName },
+          1: { cellWidth: 18, font: fontName },
+          2: { cellWidth: 22, halign: 'right', font: fontName },
+          3: { cellWidth: 28, halign: 'right', font: fontName },
+          4: { cellWidth: 32, halign: 'right', font: fontName },
+        },
+        margin: { left: margin, right: margin },
+        didParseCell: (data) => {
+          if (data.row.index === matBody.length - 1) {
+            data.cell.styles.fillColor = [226, 232, 240]
+          }
+        },
+      })
+      currentY = doc.lastAutoTable?.finalY ?? currentY
+    }
+
+    currentY += 6
+    doc.setFont(fontName, 'bold')
+    doc.setFontSize(11)
+    doc.text(
+      text('UKUPNO PROJEKAT: ') + Number(calculation.totalAmount || 0).toLocaleString('sr-RS') + ' RSD',
+      margin,
+      currentY
+    )
+    doc.setFont(fontName, 'normal')
+    doc.setFontSize(10)
+    currentY += 8
 
     if (chartImageBase64 && items.length > 0) {
       const chartWidthMm = 140
@@ -158,6 +243,8 @@ export default function SavedCalculations({ isLoggedIn, refreshTrigger = 0 }) {
   const [pdfChartFor, setPdfChartFor] = useState(null)
   const [pdfGenerating, setPdfGenerating] = useState(false)
   const [chartVisibleForCapture, setChartVisibleForCapture] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [statusUpdatingId, setStatusUpdatingId] = useState(null)
   const chartRef = useRef(null)
   const fetchingRef = useRef(false)
 
@@ -222,6 +309,23 @@ export default function SavedCalculations({ isLoggedIn, refreshTrigger = 0 }) {
     }
   }
 
+  const handleStatusToggle = async (calc) => {
+    if (!userEmail) return
+    const nextStatus = (calc.paymentStatus || 'U planu') === 'U planu' ? 'Plaćeno' : 'U planu'
+    setStatusUpdatingId(calc._id)
+    try {
+      const { data } = await axios.patch(
+        `${API_BASE}/calculations/${encodeURIComponent(userEmail)}/${calc._id}/status`,
+        { paymentStatus: nextStatus }
+      )
+      setCalculations(data.savedCalculations || [])
+    } catch (err) {
+      alert(err.response?.data?.error || 'Greška pri ažuriranju statusa.')
+    } finally {
+      setStatusUpdatingId(null)
+    }
+  }
+
   const formatDate = (dateStr) => {
     const d = new Date(dateStr)
     return d.toLocaleDateString('sr-RS', {
@@ -271,6 +375,29 @@ export default function SavedCalculations({ isLoggedIn, refreshTrigger = 0 }) {
     setPdfGenerating(false)
   }
 
+  const filteredCalculations = calculations.filter((calc) => {
+    if (!searchQuery.trim()) return true
+    const q = searchQuery.trim().toLowerCase()
+    const title = (calc.title || '').toLowerCase()
+    const location = (calc.location || '').toLowerCase()
+    const mats = Array.isArray(calc.materials) ? calc.materials : []
+    const matMatch = mats.some((m) => (m.name || '').toLowerCase().includes(q))
+    return title.includes(q) || location.includes(q) || matMatch
+  })
+
+  const totalAmount = calculations.reduce((sum, c) => sum + (Number(c.totalAmount) || 0), 0)
+  const totalPlaceno = calculations
+    .filter((c) => (c.paymentStatus || '') === 'Plaćeno')
+    .reduce((s, c) => s + (Number(c.totalAmount) || 0), 0)
+  const totalUPlanu = calculations
+    .filter((c) => (c.paymentStatus || 'U planu') !== 'Plaćeno')
+    .reduce((s, c) => s + (Number(c.totalAmount) || 0), 0)
+  const mostExpensive = calculations.length
+    ? calculations.reduce((max, c) =>
+        (Number(c.totalAmount) || 0) > (Number(max.totalAmount) || 0) ? c : max
+      )
+    : null
+
   if (!isLoggedIn) return null
 
   if (loading) {
@@ -294,6 +421,59 @@ export default function SavedCalculations({ isLoggedIn, refreshTrigger = 0 }) {
         <div className="mb-6 p-4 rounded-lg bg-red-100 text-red-800 text-sm">
           {error}
         </div>
+      )}
+
+      {calculations.length > 0 && (
+        <>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-4">
+            <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+              <p className="text-sm font-medium text-slate-500 mb-1">Ukupan iznos (svi projekti)</p>
+              <p className="text-xl font-bold text-slate-800 tabular-nums">
+                {Number(totalAmount).toLocaleString('sr-RS')} RSD
+              </p>
+              <p className="text-xs text-slate-500 mt-2">
+                Uključuje administrativne troškove i materijal / radove.
+              </p>
+            </div>
+            <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+              <p className="text-sm font-medium text-slate-500 mb-1">Broj projekata</p>
+              <p className="text-xl font-bold text-slate-800 tabular-nums">{calculations.length}</p>
+            </div>
+            <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm sm:col-span-2 lg:col-span-1">
+              <p className="text-sm font-medium text-slate-500 mb-1">Najskuplji projekat</p>
+              <p className="font-semibold text-slate-800 truncate" title={mostExpensive?.title}>
+                {mostExpensive?.title || '—'}
+              </p>
+              <p className="text-lg font-bold text-slate-800 tabular-nums mt-1">
+                {mostExpensive ? formatAmount(mostExpensive.totalAmount) : '—'}
+              </p>
+            </div>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
+            <div className="rounded-xl border border-emerald-200 bg-emerald-50/60 p-4 shadow-sm">
+              <p className="text-sm font-medium text-emerald-800 mb-1">Plaćeno (zbir projekata)</p>
+              <p className="text-lg font-bold text-emerald-900 tabular-nums">
+                {Number(totalPlaceno).toLocaleString('sr-RS')} RSD
+              </p>
+            </div>
+            <div className="rounded-xl border border-amber-200 bg-amber-50/60 p-4 shadow-sm">
+              <p className="text-sm font-medium text-amber-800 mb-1">U planu (zbir projekata)</p>
+              <p className="text-lg font-bold text-amber-900 tabular-nums">
+                {Number(totalUPlanu).toLocaleString('sr-RS')} RSD
+              </p>
+            </div>
+          </div>
+
+          <div className="mb-6">
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Pretraži po nazivu, lokaciji ili nazivu materijala..."
+              className="w-full px-4 py-3 rounded-lg border border-slate-200 bg-white text-slate-700 shadow-sm focus:ring-2 focus:ring-sky-500 focus:border-sky-500 outline-none placeholder:text-slate-400"
+            />
+          </div>
+        </>
       )}
 
       {calculations.length === 0 && !error && (
@@ -336,9 +516,17 @@ export default function SavedCalculations({ isLoggedIn, refreshTrigger = 0 }) {
 
       {calculations.length > 0 && (
         <div className="space-y-4">
-          {calculations.map((calc) => {
+          {filteredCalculations.length === 0 ? (
+            <p className="text-center text-slate-500 py-8">
+              Nema proračuna koji odgovaraju pretrazi.
+            </p>
+          ) : (
+          filteredCalculations.map((calc) => {
             const isExpanded = expandedId === calc._id
             const items = Array.isArray(calc.items) ? calc.items : []
+            const materials = Array.isArray(calc.materials) ? calc.materials : []
+            const adminSubtotal = sumAdministrativeItems(calc)
+            const materialsSubtotal = sumMaterialsLines(calc)
 
             return (
               <div
@@ -363,20 +551,37 @@ export default function SavedCalculations({ isLoggedIn, refreshTrigger = 0 }) {
                 >
                   <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                     <div className="flex-1 min-w-0">
-                      <p className="font-semibold text-slate-800 truncate">
-                        {calc.title}
-                      </p>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <p className="font-semibold text-slate-800 truncate">
+                          {calc.title}
+                        </p>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            handleStatusToggle(calc)
+                          }}
+                          disabled={statusUpdatingId === calc._id}
+                          className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors disabled:opacity-70 disabled:cursor-not-allowed ${
+                            (calc.paymentStatus || 'U planu') === 'Plaćeno'
+                              ? 'bg-emerald-100 text-emerald-800 border border-emerald-200 hover:bg-emerald-200'
+                              : 'bg-amber-100 text-amber-800 border border-amber-200 hover:bg-amber-200'
+                          }`}
+                        >
+                          {statusUpdatingId === calc._id ? '...' : (calc.paymentStatus || 'U planu')}
+                        </button>
+                      </div>
                       <p className="text-sm text-slate-500 mt-0.5">
                         {formatDate(calc.createdAt)}
                       </p>
                       <p className="text-lg font-bold text-slate-800 mt-2 tabular-nums">
                         {formatAmount(calc.totalAmount)}
                       </p>
-                      {items.length > 0 && (
-                        <p className="text-xs text-slate-500 mt-1">
-                          {items.length} stavki • Kliknite za detalje
-                        </p>
-                      )}
+                      <p className="text-xs text-slate-500 mt-1">
+                        {items.length} admin. stavki
+                        {materials.length > 0 ? ` • ${materials.length} materijala` : ''}
+                        {' • '}Kliknite za detalje
+                      </p>
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
                       <button
@@ -422,52 +627,118 @@ export default function SavedCalculations({ isLoggedIn, refreshTrigger = 0 }) {
                         Zatvori
                       </button>
                     </div>
-                    <div className="rounded-lg border border-slate-200 bg-white overflow-hidden">
-                      <table className="w-full text-sm">
-                        <thead>
-                          <tr className="bg-slate-100 border-b border-slate-200">
-                            <th className="px-4 py-2.5 text-left font-semibold text-slate-700">
-                              Stavka
-                            </th>
-                            <th className="px-4 py-2.5 text-right font-semibold text-slate-700">
-                              Iznos (RSD)
-                            </th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {items.map((item, idx) => {
-                            const label = item.vrsta ?? item.name ?? item.label ?? `Stavka ${idx + 1}`
-                            const amount = item.iznos ?? item.amount ?? item.cost ?? 0
-                            return (
-                              <tr
-                                key={idx}
-                                className={idx % 2 === 0 ? 'bg-white' : 'bg-slate-50/50'}
-                              >
-                                <td className="px-4 py-2.5 text-slate-700">{label}</td>
-                                <td className="px-4 py-2.5 text-right font-medium text-slate-800 tabular-nums">
-                                  {Number(amount).toLocaleString('sr-RS')}
+                    <div className="space-y-6">
+                      <div>
+                        <h4 className="text-xs font-semibold text-slate-600 uppercase tracking-wide mb-2">
+                          Administrativni troškovi
+                        </h4>
+                        <div className="rounded-lg border border-slate-200 bg-white overflow-hidden overflow-x-auto">
+                          <table className="w-full text-sm min-w-[280px]">
+                            <thead>
+                              <tr className="bg-slate-100 border-b border-slate-200">
+                                <th className="px-4 py-2.5 text-left font-semibold text-slate-700">
+                                  Stavka
+                                </th>
+                                <th className="px-4 py-2.5 text-right font-semibold text-slate-700">
+                                  Iznos (RSD)
+                                </th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {items.map((item, idx) => {
+                                const label = item.vrsta ?? item.name ?? item.label ?? `Stavka ${idx + 1}`
+                                const amount = item.iznos ?? item.amount ?? item.cost ?? 0
+                                return (
+                                  <tr
+                                    key={idx}
+                                    className={idx % 2 === 0 ? 'bg-white' : 'bg-slate-50/50'}
+                                  >
+                                    <td className="px-4 py-2.5 text-slate-700">{label}</td>
+                                    <td className="px-4 py-2.5 text-right font-medium text-slate-800 tabular-nums">
+                                      {Number(amount).toLocaleString('sr-RS')}
+                                    </td>
+                                  </tr>
+                                )
+                              })}
+                            </tbody>
+                            <tfoot>
+                              <tr className="bg-slate-100 border-t-2 border-slate-200">
+                                <td className="px-4 py-2.5 font-semibold text-slate-800">
+                                  Ukupno administracija
+                                </td>
+                                <td className="px-4 py-2.5 text-right font-bold text-slate-800 tabular-nums">
+                                  {Number(adminSubtotal).toLocaleString('sr-RS')} RSD
                                 </td>
                               </tr>
-                            )
-                          })}
-                        </tbody>
-                        <tfoot>
-                          <tr className="bg-slate-100 border-t-2 border-slate-200">
-                            <td className="px-4 py-2.5 font-semibold text-slate-800">
-                              Ukupno
-                            </td>
-                            <td className="px-4 py-2.5 text-right font-bold text-slate-800 tabular-nums">
-                              {formatAmount(calc.totalAmount)}
-                            </td>
-                          </tr>
-                        </tfoot>
-                      </table>
+                            </tfoot>
+                          </table>
+                        </div>
+                      </div>
+
+                      {materials.length > 0 && (
+                        <div>
+                          <h4 className="text-xs font-semibold text-slate-600 uppercase tracking-wide mb-2">
+                            Materijal i radovi
+                          </h4>
+                          <div className="rounded-lg border border-slate-200 bg-white overflow-hidden overflow-x-auto">
+                            <table className="w-full text-sm min-w-[480px]">
+                              <thead>
+                                <tr className="bg-slate-100 border-b border-slate-200">
+                                  <th className="px-3 py-2.5 text-left font-semibold text-slate-700">Naziv</th>
+                                  <th className="px-3 py-2.5 text-left font-semibold text-slate-700">Jm</th>
+                                  <th className="px-3 py-2.5 text-right font-semibold text-slate-700">Kol.</th>
+                                  <th className="px-3 py-2.5 text-right font-semibold text-slate-700">Cena</th>
+                                  <th className="px-3 py-2.5 text-right font-semibold text-slate-700">Ukupno</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {materials.map((m, idx) => (
+                                  <tr
+                                    key={m._id || idx}
+                                    className={idx % 2 === 0 ? 'bg-white' : 'bg-slate-50/50'}
+                                  >
+                                    <td className="px-3 py-2.5 text-slate-700">{m.name}</td>
+                                    <td className="px-3 py-2.5 text-slate-600">{m.unit || '—'}</td>
+                                    <td className="px-3 py-2.5 text-right tabular-nums">
+                                      {Number(m.quantity ?? 0).toLocaleString('sr-RS')}
+                                    </td>
+                                    <td className="px-3 py-2.5 text-right tabular-nums">
+                                      {Number(m.unitPrice ?? 0).toLocaleString('sr-RS')}
+                                    </td>
+                                    <td className="px-3 py-2.5 text-right font-medium tabular-nums">
+                                      {Number(m.total ?? 0).toLocaleString('sr-RS')}
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                              <tfoot>
+                                <tr className="bg-slate-100 border-t-2 border-slate-200">
+                                  <td colSpan={4} className="px-3 py-2.5 font-semibold text-slate-800">
+                                    Ukupno materijal
+                                  </td>
+                                  <td className="px-3 py-2.5 text-right font-bold text-slate-800 tabular-nums">
+                                    {Number(materialsSubtotal).toLocaleString('sr-RS')} RSD
+                                  </td>
+                                </tr>
+                              </tfoot>
+                            </table>
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="rounded-lg border-2 border-slate-300 bg-slate-50 px-4 py-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                        <span className="font-bold text-slate-800">Ukupno projekat</span>
+                        <span className="text-lg font-bold text-slate-900 tabular-nums">
+                          {formatAmount(calc.totalAmount)}
+                        </span>
+                      </div>
                     </div>
                   </div>
                 )}
               </div>
             )
-          })}
+          })
+          )}
         </div>
       )}
     </section>

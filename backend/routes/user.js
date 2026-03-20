@@ -51,10 +51,41 @@ router.delete('/calculations/:email/:calculationId', async (req, res) => {
   }
 });
 
+// PATCH /api/user/calculations/:email/:calculationId/status - Update payment status
+router.patch('/calculations/:email/:calculationId/status', async (req, res) => {
+  try {
+    const email = decodeURIComponent(req.params.email);
+    const { calculationId } = req.params;
+    const { paymentStatus } = req.body;
+
+    if (!paymentStatus || !['U planu', 'Plaćeno'].includes(paymentStatus)) {
+      return res.status(400).json({ error: 'paymentStatus must be "U planu" or "Plaćeno"' });
+    }
+
+    const user = await User.findOne({ email });
+    if (!user) {
+      return res.status(404).json({ error: 'Korisnik nije pronađen.' });
+    }
+
+    const calculation = user.savedCalculations.id(calculationId);
+    if (!calculation) {
+      return res.status(404).json({ error: 'Proračun nije pronađen.' });
+    }
+
+    calculation.paymentStatus = paymentStatus;
+    await user.save();
+
+    res.json({ message: 'Status ažuriran.', savedCalculations: user.savedCalculations });
+  } catch (err) {
+    console.error('PATCH STATUS ERROR:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // POST /api/user/save-calculation - Add a calculation to the user's savedCalculations
 router.post('/save-calculation', async (req, res) => {
   try {
-    const { userId, email, title, totalAmount, items } = req.body;
+    const { userId, email, title, totalAmount, items, location, materials } = req.body;
 
     if (!title || totalAmount == null) {
       return res.status(400).json({ error: 'title and totalAmount are required' });
@@ -73,11 +104,30 @@ router.post('/save-calculation', async (req, res) => {
       return res.status(404).json({ error: 'Korisnik nije pronađen.' });
     }
 
+    const rawMaterials = Array.isArray(materials) ? materials : [];
+    const normalizedMaterials = rawMaterials
+      .filter((m) => m && String(m.name || '').trim())
+      .map((m) => {
+        const quantity = Number(m.quantity) || 0;
+        const unitPrice = Number(m.unitPrice) || 0;
+        const lineTotal = Number(m.total) || quantity * unitPrice;
+        return {
+          name: String(m.name).trim(),
+          unit: String(m.unit || '').trim(),
+          quantity,
+          unitPrice,
+          total: lineTotal,
+        };
+      });
+
     const newCalculation = {
       title,
       totalAmount: Number(totalAmount),
       items: items || [],
+      materials: normalizedMaterials,
       createdAt: new Date(),
+      location: location || '',
+      paymentStatus: 'U planu',
     };
 
     user.savedCalculations.push(newCalculation);

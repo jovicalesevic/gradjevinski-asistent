@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import axios from 'axios'
 import { PieChart, Pie, Cell, ResponsiveContainer, Legend, Tooltip } from 'recharts'
 
@@ -9,6 +9,9 @@ const DOPRINOS_GRADSKO_ZEMLJISTE_PO_M2 = 2000
 
 const inputClasses =
   'w-full px-4 py-3 rounded-lg border border-slate-200 bg-white text-slate-700 shadow-sm focus:ring-2 focus:ring-sky-500 focus:border-sky-500 transition-shadow outline-none'
+
+const inputCompact =
+  'w-full px-3 py-2 rounded-lg border border-slate-200 bg-white text-slate-700 text-sm shadow-sm focus:ring-2 focus:ring-sky-500 focus:border-sky-500 outline-none'
 
 const CHART_COLORS = ['#0088FE', '#00C49F', '#D35400', '#8884d8']
 
@@ -32,6 +35,20 @@ export default function KalkulatorAdministrativnihTroskova({ isLoggedIn, objectT
 
   const ukupno = troskovi.reduce((sum, t) => sum + t.iznos, 0)
 
+  const [materialDraft, setMaterialDraft] = useState({
+    name: '',
+    unit: '',
+    quantity: '',
+    unitPrice: '',
+  })
+  const [materials, setMaterials] = useState([])
+
+  const materialsTotal = useMemo(
+    () => materials.reduce((sum, m) => sum + (Number(m.total) || 0), 0),
+    [materials]
+  )
+  const ukupnoProjekat = ukupno + materialsTotal
+
   const chartData = troskovi.map((item) => ({
     name: item.vrsta,
     value: item.iznos,
@@ -39,6 +56,33 @@ export default function KalkulatorAdministrativnihTroskova({ isLoggedIn, objectT
   console.log('Chart Data:', chartData)
 
   const [saving, setSaving] = useState(false)
+
+  const handleAddMaterial = () => {
+    const name = materialDraft.name.trim()
+    if (!name) {
+      alert('Unesite naziv materijala.')
+      return
+    }
+    const quantity = Math.max(0, Number(materialDraft.quantity) || 0)
+    const unitPrice = Math.max(0, Number(materialDraft.unitPrice) || 0)
+    const total = quantity * unitPrice
+    setMaterials((prev) => [
+      ...prev,
+      {
+        id: crypto.randomUUID?.() ?? `m-${Date.now()}-${prev.length}`,
+        name,
+        unit: materialDraft.unit.trim(),
+        quantity,
+        unitPrice,
+        total,
+      },
+    ])
+    setMaterialDraft({ name: '', unit: '', quantity: '', unitPrice: '' })
+  }
+
+  const handleRemoveMaterial = (id) => {
+    setMaterials((prev) => prev.filter((m) => m.id !== id))
+  }
 
   const handleSacuvajProracun = async () => {
     const email = localStorage.getItem('userEmail')
@@ -52,11 +96,21 @@ export default function KalkulatorAdministrativnihTroskova({ isLoggedIn, objectT
         municipality || 'Opština',
       ].filter(Boolean).join(' - ') || 'Administrativni troškovi'
 
+      const materialsPayload = materials.map(({ name, unit, quantity, unitPrice, total }) => ({
+        name,
+        unit,
+        quantity,
+        unitPrice,
+        total,
+      }))
+
       await axios.post('http://localhost:5000/api/user/save-calculation', {
         email,
         title,
-        totalAmount: ukupno,
+        totalAmount: ukupnoProjekat,
         items: troskovi,
+        materials: materialsPayload,
+        location: municipality || '',
       })
       alert('Proračun je uspešno sačuvan na Vašem profilu!')
       onCalculationSaved?.()
@@ -68,7 +122,7 @@ export default function KalkulatorAdministrativnihTroskova({ isLoggedIn, objectT
   }
 
   return (
-    <section className="px-4 sm:px-6 py-12 max-w-2xl mx-auto">
+    <section className="px-4 sm:px-6 py-12 max-w-4xl mx-auto">
       <h2 className="text-2xl font-bold text-slate-800 mb-6 text-center">
         Kalkulator administrativnih troškova
       </h2>
@@ -220,13 +274,17 @@ export default function KalkulatorAdministrativnihTroskova({ isLoggedIn, objectT
               </PieChart>
             </ResponsiveContainer>
           </div>
-          <div className="lg:w-80 shrink-0 p-6 rounded-xl bg-blue-50 border border-blue-100">
-            <p className="text-sm font-medium text-slate-600 mb-1">
-              Ukupno procenjeni troškovi
-            </p>
+          <div className="lg:w-80 shrink-0 p-6 rounded-xl bg-blue-50 border border-blue-100 space-y-2">
+            <p className="text-sm font-medium text-slate-600">Administrativni troškovi</p>
             <p className="text-2xl font-bold text-slate-800 tabular-nums">
               {ukupno.toLocaleString('sr-RS')} RSD
             </p>
+            {materialsTotal > 0 && (
+              <>
+                <p className="text-xs text-slate-500 pt-2 border-t border-blue-200">Ukupno projekat (admin + materijal)</p>
+                <p className="text-lg font-bold text-slate-900 tabular-nums">{ukupnoProjekat.toLocaleString('sr-RS')} RSD</p>
+              </>
+            )}
           </div>
         </div>
       )}
@@ -234,13 +292,147 @@ export default function KalkulatorAdministrativnihTroskova({ isLoggedIn, objectT
       {ukupno === 0 && (
         <div className="mt-6 p-6 rounded-xl bg-blue-50 border border-blue-100">
           <p className="text-sm font-medium text-slate-600 mb-1">
-            Ukupno procenjeni troškovi
+            Ukupno administrativni troškovi
           </p>
           <p className="text-2xl font-bold text-slate-800 tabular-nums">
             {ukupno.toLocaleString('sr-RS')} RSD
           </p>
         </div>
       )}
+
+      <div className="mt-12 pt-10 border-t border-slate-200">
+        <h3 className="text-xl font-bold text-slate-800 mb-2 text-center">
+          Materijal i radovi
+        </h3>
+        <p className="text-sm text-slate-500 text-center mb-6">
+          Dodajte stavke materijala; ukupan iznos ulazi u projekat i u arhivu.
+        </p>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-3 mb-4 items-end">
+          <div className="lg:col-span-3">
+            <label className="block text-xs font-medium text-slate-600 mb-1">Naziv</label>
+            <input
+              type="text"
+              value={materialDraft.name}
+              onChange={(e) => setMaterialDraft((d) => ({ ...d, name: e.target.value }))}
+              placeholder="npr. Cement"
+              className={inputCompact}
+            />
+          </div>
+          <div className="lg:col-span-2">
+            <label className="block text-xs font-medium text-slate-600 mb-1">Jedinica</label>
+            <input
+              type="text"
+              value={materialDraft.unit}
+              onChange={(e) => setMaterialDraft((d) => ({ ...d, unit: e.target.value }))}
+              placeholder="t, m², kom"
+              className={inputCompact}
+            />
+          </div>
+          <div className="lg:col-span-2">
+            <label className="block text-xs font-medium text-slate-600 mb-1">Količina</label>
+            <input
+              type="number"
+              min="0"
+              step="any"
+              value={materialDraft.quantity}
+              onChange={(e) => setMaterialDraft((d) => ({ ...d, quantity: e.target.value }))}
+              placeholder="0"
+              className={inputCompact}
+            />
+          </div>
+          <div className="lg:col-span-2">
+            <label className="block text-xs font-medium text-slate-600 mb-1">Cena (RSD / jm)</label>
+            <input
+              type="number"
+              min="0"
+              step="any"
+              value={materialDraft.unitPrice}
+              onChange={(e) => setMaterialDraft((d) => ({ ...d, unitPrice: e.target.value }))}
+              placeholder="0"
+              className={inputCompact}
+            />
+          </div>
+          <div className="lg:col-span-3">
+            <button
+              type="button"
+              onClick={handleAddMaterial}
+              className="w-full px-4 py-2.5 rounded-lg bg-slate-800 text-white text-sm font-semibold hover:bg-slate-900 transition-colors"
+            >
+              Dodaj
+            </button>
+          </div>
+        </div>
+
+        {materials.length > 0 && (
+          <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white shadow-sm mb-4">
+            <table className="w-full min-w-[520px] text-sm">
+              <thead>
+                <tr className="bg-slate-50 border-b border-slate-200">
+                  <th className="px-3 py-2.5 text-left font-semibold text-slate-700">Naziv</th>
+                  <th className="px-3 py-2.5 text-left font-semibold text-slate-700">Jm</th>
+                  <th className="px-3 py-2.5 text-right font-semibold text-slate-700">Kol.</th>
+                  <th className="px-3 py-2.5 text-right font-semibold text-slate-700">Cena</th>
+                  <th className="px-3 py-2.5 text-right font-semibold text-slate-700">Ukupno</th>
+                  <th className="px-3 py-2.5 w-24" />
+                </tr>
+              </thead>
+              <tbody>
+                {materials.map((m, index) => (
+                  <tr
+                    key={m.id}
+                    className={index % 2 === 0 ? 'bg-white border-b border-slate-100' : 'bg-slate-50/50 border-b border-slate-100'}
+                  >
+                    <td className="px-3 py-2.5 text-slate-800">{m.name}</td>
+                    <td className="px-3 py-2.5 text-slate-600">{m.unit || '—'}</td>
+                    <td className="px-3 py-2.5 text-right tabular-nums">{Number(m.quantity).toLocaleString('sr-RS')}</td>
+                    <td className="px-3 py-2.5 text-right tabular-nums">{Number(m.unitPrice).toLocaleString('sr-RS')}</td>
+                    <td className="px-3 py-2.5 text-right font-medium tabular-nums">{Number(m.total).toLocaleString('sr-RS')}</td>
+                    <td className="px-3 py-2.5">
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveMaterial(m.id)}
+                        className="text-xs font-medium text-red-600 hover:text-red-800"
+                      >
+                        Ukloni
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr className="bg-slate-100 border-t-2 border-slate-200">
+                  <td colSpan={4} className="px-3 py-2.5 font-semibold text-slate-800">
+                    Ukupno materijal i radovi
+                  </td>
+                  <td className="px-3 py-2.5 text-right font-bold text-slate-800 tabular-nums">
+                    {materialsTotal.toLocaleString('sr-RS')} RSD
+                  </td>
+                  <td />
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        )}
+
+        <div className="rounded-xl border-2 border-sky-200 bg-sky-50/80 p-5 shadow-sm">
+          <p className="text-sm font-medium text-slate-600 mb-3">Rezime projekta</p>
+          <ul className="space-y-2 text-sm">
+            <li className="flex justify-between gap-4">
+              <span className="text-slate-600">Administrativni troškovi</span>
+              <span className="font-semibold tabular-nums">{ukupno.toLocaleString('sr-RS')} RSD</span>
+            </li>
+            <li className="flex justify-between gap-4">
+              <span className="text-slate-600">Materijal i radovi</span>
+              <span className="font-semibold tabular-nums">{materialsTotal.toLocaleString('sr-RS')} RSD</span>
+            </li>
+            <li className="flex justify-between gap-4 pt-2 border-t border-sky-200 text-base">
+              <span className="font-bold text-slate-800">Ukupno projekat</span>
+              <span className="font-bold text-slate-900 tabular-nums">{ukupnoProjekat.toLocaleString('sr-RS')} RSD</span>
+            </li>
+          </ul>
+        </div>
+      </div>
 
       {isLoggedIn && (
         <div className="mt-6 flex justify-center">
