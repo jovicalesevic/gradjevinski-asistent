@@ -234,7 +234,6 @@ function mapServerCustomAdminItems(calc) {
       name: si.vrsta,
       amountRsd: Number(si.iznos) || 0,
       status: si.status === 'Plaćeno' ? 'Plaćeno' : 'U planu',
-      imageUrl: si.imageUrl || '',
     }))
 }
 
@@ -283,7 +282,6 @@ export default function KalkulatorAdministrativnihTroskova({
       amountRsd: Number(c.amountRsd) || 0,
       source: 'custom',
       status: c.status === 'Plaćeno' ? 'Plaćeno' : 'U planu',
-      imageUrl: c.imageUrl || '',
     }))
     return [...templateLines, ...customLines]
   }, [m2, cenaArhitekte, customAdminItems])
@@ -326,7 +324,7 @@ export default function KalkulatorAdministrativnihTroskova({
     [adminLinesFlat]
   )
 
-  /** Stavke za POST save-calculation — uključuje imageUrl za ručne stavke */
+  /** Stavke za POST save-calculation (admin. račun/slika se ne koriste — uvek prazan imageUrl) */
   const itemsPayloadForSave = useMemo(() => {
     return adminLinesFlat.map((line) => {
       const status =
@@ -337,19 +335,15 @@ export default function KalkulatorAdministrativnihTroskova({
           : getLineStatus(line) === 'Plaćeno'
             ? 'Plaćeno'
             : 'U planu'
-      const imageUrl =
-        line.source === 'custom'
-          ? customAdminItems.find((x) => x.id === line.id)?.imageUrl ?? ''
-          : ''
       return {
         vrsta: line.label,
         iznos: line.amountRsd,
         category: line.categoryId,
         status,
-        imageUrl,
+        imageUrl: '',
       }
     })
-  }, [adminLinesFlat, customAdminItems, getLineStatus])
+  }, [adminLinesFlat, getLineStatus])
 
   const ukupno = adminFinance.total
 
@@ -362,7 +356,6 @@ export default function KalkulatorAdministrativnihTroskova({
       name: c.name,
       amount: String(c.amountRsd ?? ''),
       status: c.status === 'Plaćeno' ? 'Plaćeno' : 'U planu',
-      imageUrl: c.imageUrl || '',
     }
   }, [editingAdminItemId, customAdminItems])
 
@@ -452,7 +445,7 @@ export default function KalkulatorAdministrativnihTroskova({
 
   /** Dodavanje/izmena ručne admin. stavke (validacija u AddEditModal; lokalno ili PUT) */
   const handleSubmitAdmin = useCallback(
-    async ({ name, amountRsd, categoryId, status, imageUrl }) => {
+    async ({ name, amountRsd, categoryId, status }) => {
     const email = localStorage.getItem('userEmail')
 
     if (editingAdminItemId) {
@@ -471,7 +464,7 @@ export default function KalkulatorAdministrativnihTroskova({
               iznos: amountRsd,
               category: categoryId,
               status,
-              imageUrl: imageUrl || '',
+              imageUrl: '',
             }
           )
           const merged = customAdminFromSavedResponse(data?.savedCalculations, syncedCalculationId)
@@ -480,7 +473,7 @@ export default function KalkulatorAdministrativnihTroskova({
             setCustomAdminItems((prev) =>
               prev.map((c) =>
                 c.id === editingAdminItemId
-                  ? { ...c, name, amountRsd, categoryId, status, imageUrl: imageUrl || '' }
+                  ? { ...c, name, amountRsd, categoryId, status }
                   : c
               )
             )
@@ -495,7 +488,7 @@ export default function KalkulatorAdministrativnihTroskova({
         setCustomAdminItems((prev) =>
           prev.map((c) =>
             c.id === editingAdminItemId
-              ? { ...c, name, amountRsd, categoryId, status, imageUrl: imageUrl || '' }
+              ? { ...c, name, amountRsd, categoryId, status }
               : c
           )
         )
@@ -512,7 +505,6 @@ export default function KalkulatorAdministrativnihTroskova({
         name,
         amountRsd,
         status,
-        imageUrl: imageUrl || '',
       },
     ])
     closeAdminModal()
@@ -921,11 +913,7 @@ export default function KalkulatorAdministrativnihTroskova({
                   ) : (
                     <CostCard
                       key={`custom-${line.id}`}
-                      lineId={line.id}
-                      label={line.label}
-                      amountRsd={line.amountRsd}
-                      status={line.status}
-                      imageUrl={line.imageUrl || ''}
+                      item={line}
                       isSyncing={!!adminSyncingId}
                       onStatusToggle={handleCustomAdminStatusChange}
                       onEdit={handleCustomAdminEditById}

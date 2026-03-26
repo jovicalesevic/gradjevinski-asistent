@@ -1,5 +1,7 @@
 # Gradjevinski asistent
 
+Projekat je nekompletan a rad na njemu pauziran.
+
 ## Prerequisites
 
 - **Node.js** 20 or newer

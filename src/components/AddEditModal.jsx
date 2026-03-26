@@ -39,7 +39,6 @@ function emptyAdminDraft() {
     name: '',
     amount: '',
     status: 'U planu',
-    imageUrl: '',
   }
 }
 
@@ -88,7 +87,6 @@ export default function AddEditModal({
           name: String(initialValues.name ?? ''),
           amount: String(initialValues.amount ?? ''),
           status: initialValues.status === 'Plaćeno' ? 'Plaćeno' : 'U planu',
-          imageUrl: String(initialValues.imageUrl ?? '').trim(),
         })
       } else {
         setDraft(emptyAdminDraft())
@@ -142,7 +140,6 @@ export default function AddEditModal({
   }, [])
 
   const handleSubmit = async () => {
-    const imageUrl = String(draft.imageUrl ?? '').trim()
     if (variant === 'admin') {
       const name = draft.name.trim()
       if (!name) {
@@ -153,31 +150,32 @@ export default function AddEditModal({
       if (amountRsd === null) return
       const categoryId = normalizeAdminCategoryId(draft.categoryId)
       const status = draft.status === 'Plaćeno' ? 'Plaćeno' : 'U planu'
-      await onSubmit({ name, amountRsd, categoryId, status, imageUrl })
-    } else {
-      const name = draft.name.trim()
-      if (!name) {
-        alert('Unesite naziv materijala.')
-        return
-      }
-      const quantity = validateStrictPositive(draft.quantity, 'Količina')
-      if (quantity === null) return
-      const unitPrice = validateStrictPositive(draft.unitPrice, 'Jedinična cena (RSD)')
-      if (unitPrice === null) return
-      const total = quantity * unitPrice
-      const categoryId = normalizeCategoryId(draft.categoryId)
-      const status = draft.status === 'Plaćeno' ? 'Plaćeno' : 'U planu'
-      await onSubmit({
-        name,
-        unit: draft.unit.trim(),
-        quantity,
-        unitPrice,
-        total,
-        categoryId,
-        status,
-        imageUrl,
-      })
+      await onSubmit({ name, amountRsd, categoryId, status })
+      return
     }
+    const imageUrl = String(draft.imageUrl ?? '').trim()
+    const name = draft.name.trim()
+    if (!name) {
+      alert('Unesite naziv materijala.')
+      return
+    }
+    const quantity = validateStrictPositive(draft.quantity, 'Količina')
+    if (quantity === null) return
+    const unitPrice = validateStrictPositive(draft.unitPrice, 'Jedinična cena (RSD)')
+    if (unitPrice === null) return
+    const total = quantity * unitPrice
+    const categoryId = normalizeCategoryId(draft.categoryId)
+    const status = draft.status === 'Plaćeno' ? 'Plaćeno' : 'U planu'
+    await onSubmit({
+      name,
+      unit: draft.unit.trim(),
+      quantity,
+      unitPrice,
+      total,
+      categoryId,
+      status,
+      imageUrl,
+    })
   }
 
   const saveDisabled = submitDisabled || isUploading
@@ -301,12 +299,10 @@ export default function AddEditModal({
                 <option value="Plaćeno">Plaćeno</option>
               </select>
             </div>
-            {receiptBlock}
             <div className="flex flex-col-reverse sm:flex-row gap-3 pt-2">
               <button
                 type="button"
                 onClick={onClose}
-                disabled={isUploading}
                 className="flex-1 min-h-[48px] rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
               >
                 Otkaži
@@ -314,7 +310,7 @@ export default function AddEditModal({
               <button
                 type="button"
                 onClick={() => void handleSubmit()}
-                disabled={saveDisabled}
+                disabled={submitDisabled}
                 className="flex-1 min-h-[48px] rounded-xl bg-slate-800 px-4 py-3 text-sm font-semibold text-white hover:bg-slate-900 disabled:opacity-60"
               >
                 {isEdit ? 'Sačuvaj izmene' : 'Dodaj'}

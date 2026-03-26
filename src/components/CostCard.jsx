@@ -1,5 +1,5 @@
 import { memo, useCallback } from 'react'
-import { Paperclip, Pencil, Trash2 } from 'lucide-react'
+import { Pencil, Trash2 } from 'lucide-react'
 
 const itemCardClass = 'rounded-xl border border-slate-200 bg-white p-4 shadow-sm'
 const statusSelectClass =
@@ -18,16 +18,17 @@ function formatRsd(amount) {
  * Jedna ručna administrativna stavka: status, iznos, Izmeni / Ukloni.
  */
 const CostCard = memo(function CostCard({
-  lineId,
-  label,
-  amountRsd,
-  status,
-  imageUrl = '',
+  item,
   isSyncing,
   onStatusToggle,
   onEdit,
   onDelete,
 }) {
+  const lineId = item.id
+  const label = item.label
+  const amountRsd = item.amountRsd
+  const status = item.status
+
   const handleSelectChange = useCallback(
     (e) => {
       const v = e.target.value === 'Plaćeno' ? 'Plaćeno' : 'U planu'
@@ -49,20 +50,7 @@ const CostCard = memo(function CostCard({
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0 flex-1">
           <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Naziv troška</p>
-          <div className="mt-0.5 flex flex-wrap items-baseline gap-x-1">
-            <h4 className="min-w-0 font-semibold text-slate-900 leading-snug">{label}</h4>
-            {imageUrl ? (
-              <Paperclip
-                className="w-4 h-4 text-blue-500 cursor-pointer ml-2 inline shrink-0"
-                strokeWidth={2}
-                aria-hidden
-                onClick={(e) => {
-                  e.stopPropagation()
-                  window.open(imageUrl, '_blank', 'noopener,noreferrer')
-                }}
-              />
-            ) : null}
-          </div>
+          <h4 className="mt-0.5 min-w-0 font-semibold text-slate-900 leading-snug">{label}</h4>
         </div>
         <div className="shrink-0 w-full sm:w-auto sm:min-w-[160px]">
           <label className="sr-only" htmlFor={`adm-status-${lineId}`}>
