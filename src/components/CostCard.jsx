@@ -1,5 +1,5 @@
 import { memo, useCallback } from 'react'
-import { Pencil, Trash2 } from 'lucide-react'
+import { Paperclip, Pencil, Trash2 } from 'lucide-react'
 
 const itemCardClass = 'rounded-xl border border-slate-200 bg-white p-4 shadow-sm'
 const statusSelectClass =
@@ -22,6 +22,7 @@ const CostCard = memo(function CostCard({
   label,
   amountRsd,
   status,
+  imageUrl = '',
   isSyncing,
   onStatusToggle,
   onEdit,
@@ -48,7 +49,20 @@ const CostCard = memo(function CostCard({
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0 flex-1">
           <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Naziv troška</p>
-          <h4 className="font-semibold text-slate-900 leading-snug">{label}</h4>
+          <div className="mt-0.5 flex flex-wrap items-baseline gap-x-1">
+            <h4 className="min-w-0 font-semibold text-slate-900 leading-snug">{label}</h4>
+            {imageUrl ? (
+              <Paperclip
+                className="w-4 h-4 text-blue-500 cursor-pointer ml-2 inline shrink-0"
+                strokeWidth={2}
+                aria-hidden
+                onClick={(e) => {
+                  e.stopPropagation()
+                  window.open(imageUrl, '_blank', 'noopener,noreferrer')
+                }}
+              />
+            ) : null}
+          </div>
         </div>
         <div className="shrink-0 w-full sm:w-auto sm:min-w-[160px]">
           <label className="sr-only" htmlFor={`adm-status-${lineId}`}>

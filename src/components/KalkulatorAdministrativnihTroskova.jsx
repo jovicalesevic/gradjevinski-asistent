@@ -283,6 +283,7 @@ export default function KalkulatorAdministrativnihTroskova({
       amountRsd: Number(c.amountRsd) || 0,
       source: 'custom',
       status: c.status === 'Plaćeno' ? 'Plaćeno' : 'U planu',
+      imageUrl: c.imageUrl || '',
     }))
     return [...templateLines, ...customLines]
   }, [m2, cenaArhitekte, customAdminItems])
@@ -924,6 +925,7 @@ export default function KalkulatorAdministrativnihTroskova({
                       label={line.label}
                       amountRsd={line.amountRsd}
                       status={line.status}
+                      imageUrl={line.imageUrl || ''}
                       isSyncing={!!adminSyncingId}
                       onStatusToggle={handleCustomAdminStatusChange}
                       onEdit={handleCustomAdminEditById}
