@@ -18,7 +18,11 @@ function App() {
 
   const toggleModal = () => setIsModalOpen((prev) => !prev)
 
-  const handleLoginSuccess = () => setIsLoggedIn(true)
+  const handleLoginSuccess = () => {
+    setIsLoggedIn(true)
+    setShowRoadmap(true)
+    setPendingScrollToDashboard(true)
+  }
 
   const handleLogout = () => {
     localStorage.removeItem('isLoggedIn')
@@ -31,6 +35,7 @@ function App() {
   }
 
   const [pendingScrollToArchive, setPendingScrollToArchive] = useState(false)
+  const [pendingScrollToDashboard, setPendingScrollToDashboard] = useState(false)
 
   /** Opens roadmap/calculator/archive and scrolls to archive after the section mounts. */
   const handleGoToArchive = () => {
@@ -49,6 +54,18 @@ function App() {
     }, 350)
     return () => clearTimeout(timer)
   }, [pendingScrollToArchive, showRoadmap])
+
+  useEffect(() => {
+    if (!pendingScrollToDashboard || !showRoadmap) return
+    const timer = window.setTimeout(() => {
+      document.getElementById('dashboard')?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'start',
+      })
+      setPendingScrollToDashboard(false)
+    }, 400)
+    return () => clearTimeout(timer)
+  }, [pendingScrollToDashboard, showRoadmap])
 
   const handleReset = () => {
     setShowRoadmap(false)

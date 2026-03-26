@@ -1,16 +1,49 @@
-# React + Vite
+# Gradjevinski asistent
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+## Prerequisites
 
-Currently, two official plugins are available:
+- **Node.js** 20 or newer
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+## Environment variables (MongoDB)
 
-## React Compiler
+The backend needs a **`backend/.env`** file with your MongoDB connection settings. At minimum, define **`MONGO_URI`** (used by Mongoose to connect to MongoDB). Without this file, the server cannot connect to the database.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+Example shape (adjust values for your cluster):
 
-## Expanding the ESLint configuration
+```env
+MONGO_URI=mongodb+srv://user:password@cluster.example.mongodb.net/dbname
+PORT=5000
+```
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+`PORT` is optional (defaults to `5000`).
+
+## Running the project
+
+You need **two terminals**: one for the API and one for the Vite dev server.
+
+### Backend
+
+From the repository root:
+
+```bash
+cd backend && node server.js
+```
+
+### Frontend
+
+From the repository root (in a second terminal):
+
+```bash
+npm run dev
+```
+
+The frontend dev server will print a local URL (typically `http://localhost:5173`). Ensure the backend is running so API calls from the app succeed.
+
+## Scripts (from repository root)
+
+| Command | Description |
+|--------|-------------|
+| `npm run dev` | Start the Vite development server |
+| `npm run build` | Production build |
+| `npm run preview` | Preview the production build locally |
+| `npm run backend` or `npm start` | Run the backend (`node backend/server.js`) |

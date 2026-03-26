@@ -30,7 +30,7 @@ export default function Navbar({ toggleModal, isLoggedIn, onLogout }) {
   return (
     <nav className="relative flex items-center justify-between px-4 sm:px-6 py-4 bg-white border-b border-slate-200 shadow-sm">
       <span className="text-xl font-semibold text-slate-800 tracking-tight">
-        GrađevinskiAsistent
+        Građevinski Asistent
       </span>
 
       {/* Desktop: links + button */}

@@ -1,4 +1,4 @@
-export default function Modal({ onClose, children }) {
+export default function Modal({ onClose, children, panelClassName = 'max-w-md' }) {
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50"
@@ -7,7 +7,7 @@ export default function Modal({ onClose, children }) {
       aria-modal="true"
     >
       <div
-        className="relative w-full max-w-md rounded-2xl bg-white p-8 shadow-xl"
+        className={`relative w-full rounded-2xl bg-white p-6 sm:p-8 shadow-xl ${panelClassName}`}
         onClick={(e) => e.stopPropagation()}
       >
         <button

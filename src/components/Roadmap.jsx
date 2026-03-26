@@ -42,7 +42,7 @@ const constructionSteps = [
 
 export default function Roadmap({ onReset }) {
   return (
-    <section className="px-4 sm:px-6 py-12 max-w-2xl mx-auto">
+    <section id="dashboard" className="px-4 sm:px-6 py-12 max-w-2xl mx-auto">
       <h2 className="text-2xl font-bold text-slate-800 mb-8 text-center">
         Put do upotrebne dozvole
       </h2>
