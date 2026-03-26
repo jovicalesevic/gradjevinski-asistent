@@ -1,6 +1,17 @@
 import mongoose from 'mongoose';
 import bcrypt from 'bcryptjs';
 
+/** Administrativne stavke u okviru sačuvanog proračuna (Takse, projekti, …) */
+const adminItemSchema = new mongoose.Schema(
+  {
+    vrsta: { type: String, required: true },
+    iznos: { type: Number, required: true },
+    category: { type: String, default: '' },
+    status: { type: String, enum: ['U planu', 'Plaćeno'], default: 'U planu' },
+  },
+  { _id: true }
+);
+
 const materialSchema = new mongoose.Schema(
   {
     name: { type: String, required: true },
@@ -11,7 +22,7 @@ const materialSchema = new mongoose.Schema(
     category: { type: String, default: 'ostalo' },
     status: { type: String, enum: ['U planu', 'Plaćeno'], default: 'U planu' },
   },
-  { _id: false }
+  { _id: true }
 );
 
 const userSchema = new mongoose.Schema({
@@ -31,7 +42,7 @@ const userSchema = new mongoose.Schema({
     {
       title: { type: String, required: true },
       totalAmount: { type: Number, required: true },
-      items: { type: mongoose.Schema.Types.Mixed, default: [] },
+      items: { type: [adminItemSchema], default: [] },
       createdAt: { type: Date, default: Date.now },
       location: { type: String, default: '' },
       paymentStatus: { type: String, enum: ['U planu', 'Plaćeno'], default: 'U planu' },

@@ -1,6 +1,6 @@
 import { useState, useMemo, useCallback } from 'react'
 import axios from 'axios'
-import { ChevronDown } from 'lucide-react'
+import { ChevronDown, Pencil, Trash2 } from 'lucide-react'
 import { API_USER_BASE } from '../config/api.js'
 import {
   MATERIAL_CATEGORIES,
@@ -11,7 +11,6 @@ import {
   ADMIN_COST_CATEGORIES,
   ADMIN_TEMPLATE_ITEM_DEFS,
   DEFAULT_ADMIN_CATEGORY_ID,
-  RSD_PER_EUR,
   computeTemplateItemRsd,
   normalizeAdminCategoryId,
 } from '../data/adminCostCategories.js'
@@ -36,12 +35,51 @@ const primaryActionBtnClass =
 
 const CHART_COLORS = ['#0088FE', '#00C49F', '#D35400', '#8884d8']
 
-function formatMoney(amountRsd, currency) {
-  if (currency === 'EUR') {
-    const v = amountRsd / RSD_PER_EUR
-    return `${v.toLocaleString('sr-RS', { minimumFractionDigits: 0, maximumFractionDigits: 2 })} EUR`
-  }
-  return `${amountRsd.toLocaleString('sr-RS')} RSD`
+function formatRsd(amount) {
+  const n = Number(amount) || 0
+  return `${n.toLocaleString('sr-RS')} RSD`
+}
+
+function isMongoId(id) {
+  return typeof id === 'string' && /^[a-f0-9]{24}$/i.test(id)
+}
+
+function mapServerMaterialsToLocal(materials) {
+  return (materials || []).map((m) => ({
+    id: String(m._id ?? m.id),
+    categoryId: normalizeCategoryId(m.category || m.categoryId || 'ostalo'),
+    name: m.name,
+    unit: m.unit || '',
+    quantity: Number(m.quantity) || 0,
+    unitPrice: Number(m.unitPrice) || 0,
+    total: Number(m.total) || 0,
+    status: m.status === 'Plaćeno' ? 'Plaćeno' : 'U planu',
+  }))
+}
+
+function materialsFromSavedResponse(savedCalculations, calcId) {
+  const c = savedCalculations?.find((x) => String(x._id) === String(calcId))
+  return c ? mapServerMaterialsToLocal(c.materials) : null
+}
+
+/** Ručno dodate admin. stavke iz sačuvanog proračuna (bez šablonskih naziva) */
+function mapServerCustomAdminItems(calc) {
+  if (!calc?.items?.length) return []
+  const templateLabels = new Set(ADMIN_TEMPLATE_ITEM_DEFS.map((d) => d.label))
+  return calc.items
+    .filter((si) => si && si._id && !templateLabels.has(String(si.vrsta || '').trim()))
+    .map((si) => ({
+      id: String(si._id),
+      categoryId: normalizeAdminCategoryId(si.category || 'ostalo'),
+      name: si.vrsta,
+      amountRsd: Number(si.iznos) || 0,
+      status: si.status === 'Plaćeno' ? 'Plaćeno' : 'U planu',
+    }))
+}
+
+function customAdminFromSavedResponse(savedCalculations, calcId) {
+  const c = savedCalculations?.find((x) => String(x._id) === String(calcId))
+  return c ? mapServerCustomAdminItems(c) : null
 }
 
 export default function KalkulatorAdministrativnihTroskova({
@@ -53,11 +91,12 @@ export default function KalkulatorAdministrativnihTroskova({
 }) {
   const [kvadratura, setKvadratura] = useState('')
   const [cenaArhitekte, setCenaArhitekte] = useState(15)
-  const [currency, setCurrency] = useState('RSD')
 
   const [adminItemStatus, setAdminItemStatus] = useState({})
   const [customAdminItems, setCustomAdminItems] = useState([])
   const [addAdminModalOpen, setAddAdminModalOpen] = useState(false)
+  const [editingAdminItemId, setEditingAdminItemId] = useState(null)
+  const [adminSyncingId, setAdminSyncingId] = useState(null)
   const [adminDraft, setAdminDraft] = useState({
     categoryId: DEFAULT_ADMIN_CATEGORY_ID,
     name: '',
@@ -137,6 +176,11 @@ export default function KalkulatorAdministrativnihTroskova({
   })
   const [materials, setMaterials] = useState([])
   const [addMaterialModalOpen, setAddMaterialModalOpen] = useState(false)
+  /** Poslednji sačuvan proračun na serveru — omogućava PUT/DELETE materijala po Mongo ID-u */
+  const [syncedCalculationId, setSyncedCalculationId] = useState(null)
+  /** `null` = novi unos, inače `id` stavke koja se menja */
+  const [editingMaterialId, setEditingMaterialId] = useState(null)
+  const [materialSyncingId, setMaterialSyncingId] = useState(null)
 
   const materialsTotal = useMemo(
     () => materials.reduce((sum, m) => sum + (Number(m.total) || 0), 0),
@@ -191,11 +235,42 @@ export default function KalkulatorAdministrativnihTroskova({
     )
   }
 
-  const handleRemoveCustomAdmin = (id) => {
-    setCustomAdminItems((prev) => prev.filter((c) => c.id !== id))
+  const resetAdminDraft = useCallback(() => {
+    setAdminDraft({
+      categoryId: DEFAULT_ADMIN_CATEGORY_ID,
+      name: '',
+      amount: '',
+      status: 'U planu',
+    })
+  }, [])
+
+  const closeAdminModal = useCallback(() => {
+    setAddAdminModalOpen(false)
+    setEditingAdminItemId(null)
+    resetAdminDraft()
+  }, [resetAdminDraft])
+
+  const openAddAdminModal = () => {
+    setEditingAdminItemId(null)
+    resetAdminDraft()
+    setAddAdminModalOpen(true)
   }
 
-  const handleAddCustomAdmin = () => {
+  const openEditAdminModal = (line) => {
+    if (line.source !== 'custom') return
+    const c = customAdminItems.find((x) => x.id === line.id)
+    if (!c) return
+    setEditingAdminItemId(c.id)
+    setAdminDraft({
+      categoryId: normalizeAdminCategoryId(c.categoryId),
+      name: c.name,
+      amount: String(c.amountRsd ?? ''),
+      status: c.status === 'Plaćeno' ? 'Plaćeno' : 'U planu',
+    })
+    setAddAdminModalOpen(true)
+  }
+
+  const handleSubmitAdmin = async () => {
     const name = adminDraft.name.trim()
     if (!name) {
       alert('Unesite naziv troška.')
@@ -204,6 +279,56 @@ export default function KalkulatorAdministrativnihTroskova({
     const amountRsd = Math.max(0, Number(adminDraft.amount) || 0)
     const categoryId = normalizeAdminCategoryId(adminDraft.categoryId)
     const status = adminDraft.status === 'Plaćeno' ? 'Plaćeno' : 'U planu'
+    const email = localStorage.getItem('userEmail')
+
+    if (editingAdminItemId) {
+      if (
+        isLoggedIn &&
+        email &&
+        syncedCalculationId &&
+        isMongoId(editingAdminItemId)
+      ) {
+        setAdminSyncingId(editingAdminItemId)
+        try {
+          const { data } = await axios.put(
+            `${API_USER_BASE}/calculations/${encodeURIComponent(email)}/${syncedCalculationId}/items/${editingAdminItemId}`,
+            {
+              vrsta: name,
+              iznos: amountRsd,
+              category: categoryId,
+              status,
+            }
+          )
+          const merged = customAdminFromSavedResponse(data?.savedCalculations, syncedCalculationId)
+          if (merged) setCustomAdminItems(merged)
+          else {
+            setCustomAdminItems((prev) =>
+              prev.map((c) =>
+                c.id === editingAdminItemId
+                  ? { ...c, name, amountRsd, categoryId, status }
+                  : c
+              )
+            )
+          }
+          onCalculationSaved?.()
+        } catch (err) {
+          alert(err.response?.data?.error || 'Greška pri ažuriranju troška.')
+        } finally {
+          setAdminSyncingId(null)
+        }
+      } else {
+        setCustomAdminItems((prev) =>
+          prev.map((c) =>
+            c.id === editingAdminItemId
+              ? { ...c, name, amountRsd, categoryId, status }
+              : c
+          )
+        )
+      }
+      closeAdminModal()
+      return
+    }
+
     setCustomAdminItems((prev) => [
       ...prev,
       {
@@ -214,16 +339,70 @@ export default function KalkulatorAdministrativnihTroskova({
         status,
       },
     ])
-    setAdminDraft({
-      categoryId: DEFAULT_ADMIN_CATEGORY_ID,
-      name: '',
-      amount: '',
-      status: 'U planu',
-    })
-    setAddAdminModalOpen(false)
+    closeAdminModal()
   }
 
-  const handleAddMaterial = () => {
+  const handleRemoveCustomAdmin = async (id) => {
+    if (!window.confirm('Da li si siguran?')) return
+    const email = localStorage.getItem('userEmail')
+
+    if (isLoggedIn && email && syncedCalculationId && isMongoId(id)) {
+      setAdminSyncingId(id)
+      try {
+        const { data } = await axios.delete(
+          `${API_USER_BASE}/calculations/${encodeURIComponent(email)}/${syncedCalculationId}/items/${id}`
+        )
+        const merged = customAdminFromSavedResponse(data?.savedCalculations, syncedCalculationId)
+        if (merged) setCustomAdminItems(merged)
+        else setCustomAdminItems((prev) => prev.filter((c) => c.id !== id))
+        onCalculationSaved?.()
+      } catch (err) {
+        alert(err.response?.data?.error || 'Greška pri brisanju troška.')
+      } finally {
+        setAdminSyncingId(null)
+      }
+    } else {
+      setCustomAdminItems((prev) => prev.filter((c) => c.id !== id))
+    }
+  }
+
+  const resetMaterialDraft = useCallback(() => {
+    setMaterialDraft({
+      categoryId: DEFAULT_MATERIAL_CATEGORY_ID,
+      name: '',
+      unit: '',
+      quantity: '',
+      unitPrice: '',
+      status: 'U planu',
+    })
+  }, [])
+
+  const closeMaterialModal = useCallback(() => {
+    setAddMaterialModalOpen(false)
+    setEditingMaterialId(null)
+    resetMaterialDraft()
+  }, [resetMaterialDraft])
+
+  const openAddMaterialModal = () => {
+    setEditingMaterialId(null)
+    resetMaterialDraft()
+    setAddMaterialModalOpen(true)
+  }
+
+  const openEditMaterialModal = (m) => {
+    setEditingMaterialId(m.id)
+    setMaterialDraft({
+      categoryId: normalizeCategoryId(m.categoryId),
+      name: m.name,
+      unit: m.unit || '',
+      quantity: String(m.quantity ?? ''),
+      unitPrice: String(m.unitPrice ?? ''),
+      status: m.status === 'Plaćeno' ? 'Plaćeno' : 'U planu',
+    })
+    setAddMaterialModalOpen(true)
+  }
+
+  const handleSubmitMaterial = async () => {
     const name = materialDraft.name.trim()
     if (!name) {
       alert('Unesite naziv materijala.')
@@ -234,6 +413,60 @@ export default function KalkulatorAdministrativnihTroskova({
     const total = quantity * unitPrice
     const categoryId = normalizeCategoryId(materialDraft.categoryId)
     const status = materialDraft.status === 'Plaćeno' ? 'Plaćeno' : 'U planu'
+    const email = localStorage.getItem('userEmail')
+
+    if (editingMaterialId) {
+      if (
+        isLoggedIn &&
+        email &&
+        syncedCalculationId &&
+        isMongoId(editingMaterialId)
+      ) {
+        setMaterialSyncingId(editingMaterialId)
+        try {
+          // PUT /api/user/calculations/:email/:calculationId/materials/:materialId
+          const { data } = await axios.put(
+            `${API_USER_BASE}/calculations/${encodeURIComponent(email)}/${syncedCalculationId}/materials/${editingMaterialId}`,
+            {
+              name,
+              unit: materialDraft.unit.trim(),
+              quantity,
+              unitPrice,
+              total,
+              category: categoryId,
+              status,
+            }
+          )
+          const merged = materialsFromSavedResponse(data?.savedCalculations, syncedCalculationId)
+          if (merged) setMaterials(merged)
+          else {
+            setMaterials((prev) =>
+              prev.map((m) =>
+                m.id === editingMaterialId
+                  ? { ...m, name, unit: materialDraft.unit.trim(), quantity, unitPrice, total, categoryId, status }
+                  : m
+              )
+            )
+          }
+          onCalculationSaved?.()
+        } catch (err) {
+          alert(err.response?.data?.error || 'Greška pri ažuriranju stavke.')
+        } finally {
+          setMaterialSyncingId(null)
+        }
+      } else {
+        setMaterials((prev) =>
+          prev.map((m) =>
+            m.id === editingMaterialId
+              ? { ...m, name, unit: materialDraft.unit.trim(), quantity, unitPrice, total, categoryId, status }
+              : m
+          )
+        )
+      }
+      closeMaterialModal()
+      return
+    }
+
     setMaterials((prev) => [
       ...prev,
       {
@@ -247,23 +480,56 @@ export default function KalkulatorAdministrativnihTroskova({
         status,
       },
     ])
-    setMaterialDraft({
-      categoryId: DEFAULT_MATERIAL_CATEGORY_ID,
-      name: '',
-      unit: '',
-      quantity: '',
-      unitPrice: '',
-      status: 'U planu',
-    })
-    setAddMaterialModalOpen(false)
+    closeMaterialModal()
   }
 
-  const handleRemoveMaterial = (id) => {
-    setMaterials((prev) => prev.filter((m) => m.id !== id))
+  const handleDeleteMaterial = async (m) => {
+    if (!window.confirm('Da li si siguran?')) return
+    const email = localStorage.getItem('userEmail')
+
+    if (isLoggedIn && email && syncedCalculationId && isMongoId(m.id)) {
+      setMaterialSyncingId(m.id)
+      try {
+        const { data } = await axios.delete(
+          `${API_USER_BASE}/calculations/${encodeURIComponent(email)}/${syncedCalculationId}/materials/${m.id}`
+        )
+        const merged = materialsFromSavedResponse(data?.savedCalculations, syncedCalculationId)
+        if (merged) setMaterials(merged)
+        else setMaterials((prev) => prev.filter((x) => x.id !== m.id))
+        onCalculationSaved?.()
+      } catch (err) {
+        alert(err.response?.data?.error || 'Greška pri brisanju stavke.')
+      } finally {
+        setMaterialSyncingId(null)
+      }
+    } else {
+      setMaterials((prev) => prev.filter((x) => x.id !== m.id))
+    }
   }
 
-  const handleMaterialStatusChange = (id, status) => {
-    setMaterials((prev) => prev.map((m) => (m.id === id ? { ...m, status } : m)))
+  const handleMaterialBadgeToggle = async (m) => {
+    const next = m.status === 'Plaćeno' ? 'U planu' : 'Plaćeno'
+    const email = localStorage.getItem('userEmail')
+
+    if (isLoggedIn && email && syncedCalculationId && isMongoId(m.id)) {
+      setMaterialSyncingId(m.id)
+      try {
+        const { data } = await axios.put(
+          `${API_USER_BASE}/calculations/${encodeURIComponent(email)}/${syncedCalculationId}/materials/${m.id}`,
+          { status: next }
+        )
+        const merged = materialsFromSavedResponse(data?.savedCalculations, syncedCalculationId)
+        if (merged) setMaterials(merged)
+        else setMaterials((prev) => prev.map((x) => (x.id === m.id ? { ...x, status: next } : x)))
+        onCalculationSaved?.()
+      } catch (err) {
+        alert(err.response?.data?.error || 'Greška pri promeni statusa.')
+      } finally {
+        setMaterialSyncingId(null)
+      }
+    } else {
+      setMaterials((prev) => prev.map((x) => (x.id === m.id ? { ...x, status: next } : x)))
+    }
   }
 
   const handleSacuvajProracun = async () => {
@@ -289,7 +555,7 @@ export default function KalkulatorAdministrativnihTroskova({
         })
       )
 
-      await axios.post(`${API_USER_BASE}/save-calculation`, {
+      const { data } = await axios.post(`${API_USER_BASE}/save-calculation`, {
         email,
         title,
         totalAmount: ukupnoProjekat,
@@ -297,6 +563,15 @@ export default function KalkulatorAdministrativnihTroskova({
         materials: materialsPayload,
         location: municipality || '',
       })
+      const list = data?.user?.savedCalculations
+      if (Array.isArray(list) && list.length > 0) {
+        const last = list[list.length - 1]
+        if (last?._id) {
+          setSyncedCalculationId(String(last._id))
+          setMaterials(mapServerMaterialsToLocal(last.materials))
+          setCustomAdminItems(mapServerCustomAdminItems(last))
+        }
+      }
       alert('Proračun je uspešno sačuvan na Vašem profilu!')
       onCalculationSaved?.()
     } catch (err) {
@@ -306,45 +581,21 @@ export default function KalkulatorAdministrativnihTroskova({
     }
   }
 
-  const currencyBtn = (code) =>
-    `min-h-[44px] px-4 rounded-lg text-sm font-semibold transition-colors ${
-      currency === code
-        ? 'bg-slate-800 text-white shadow-sm'
-        : 'text-slate-600 hover:bg-white hover:text-slate-900'
-    }`
-
   return (
     <section className="px-4 sm:px-6 py-12 max-w-4xl mx-auto">
       <h2 className="text-2xl font-bold text-slate-800 mb-4 text-center">
         Kalkulator administrativnih troškova
       </h2>
 
-      {/* Sticky summary + currency */}
+      {/* Sticky summary — svi iznosi u RSD */}
       <div className="sticky top-0 z-30 -mx-4 sm:mx-0 mb-8 rounded-b-2xl border border-slate-200/80 bg-white/95 px-4 py-4 shadow-md backdrop-blur-md sm:rounded-2xl">
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex flex-wrap items-center justify-center gap-3 sm:justify-start">
-            <span className="text-sm font-medium text-slate-600">Valuta</span>
-            <div
-              className="inline-flex rounded-xl border border-slate-200 bg-slate-100/80 p-1"
-              role="group"
-              aria-label="Izbor valute"
-            >
-              <button type="button" className={currencyBtn('RSD')} onClick={() => setCurrency('RSD')}>
-                RSD
-              </button>
-              <button type="button" className={currencyBtn('EUR')} onClick={() => setCurrency('EUR')}>
-                EUR
-              </button>
-            </div>
-            <span className="text-xs text-slate-400">Kurs: 1 EUR = {RSD_PER_EUR} RSD</span>
-          </div>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 sm:gap-4">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 sm:gap-4">
             <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-center sm:text-left">
               <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
                 Ukupno administrativno
               </p>
               <p className="mt-1 text-lg font-bold tabular-nums text-slate-900 sm:text-xl">
-                {formatMoney(adminFinance.total, currency)}
+                {formatRsd(adminFinance.total)}
               </p>
             </div>
             <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-center sm:text-left">
@@ -352,7 +603,7 @@ export default function KalkulatorAdministrativnihTroskova({
                 Plaćeno
               </p>
               <p className="mt-1 text-lg font-bold tabular-nums text-emerald-900 sm:text-xl">
-                {formatMoney(adminFinance.placeno, currency)}
+                {formatRsd(adminFinance.placeno)}
               </p>
             </div>
             <div className="rounded-xl border border-amber-200 bg-gradient-to-br from-amber-50 to-red-50/40 px-4 py-3 text-center sm:text-left ring-1 ring-amber-200/80">
@@ -360,10 +611,9 @@ export default function KalkulatorAdministrativnihTroskova({
                 Preostalo
               </p>
               <p className="mt-1 text-lg font-bold tabular-nums text-red-900 sm:text-xl">
-                {formatMoney(adminFinance.preostalo, currency)}
+                {formatRsd(adminFinance.preostalo)}
               </p>
             </div>
-          </div>
         </div>
       </div>
 
@@ -427,24 +677,21 @@ export default function KalkulatorAdministrativnihTroskova({
         Administrativni troškovi
       </h3>
       <p className="text-sm text-slate-500 text-center mb-6 max-w-xl mx-auto">
-        Takse, projekti i doprinosi po grupama. Unosi su u RSD; prikaz u EUR koristi kurs{' '}
-        {RSD_PER_EUR} RSD za 1 EUR.
+        Takse, projekti i doprinosi po grupama. Svi iznosi u proračunu su u RSD.
       </p>
 
       <div className="flex justify-center sm:justify-end mb-6">
-        <button
-          type="button"
-          onClick={() => setAddAdminModalOpen(true)}
-          className={primaryActionBtnClass}
-        >
+        <button type="button" onClick={openAddAdminModal} className={primaryActionBtnClass}>
           + Dodaj trošak
         </button>
       </div>
 
       {addAdminModalOpen && (
-        <Modal onClose={() => setAddAdminModalOpen(false)} panelClassName="max-w-lg">
+        <Modal onClose={closeAdminModal} panelClassName="max-w-lg">
           <div className="pr-8">
-            <h4 className="text-lg font-bold text-slate-900 mb-1">Novi administrativni trošak</h4>
+            <h4 className="text-lg font-bold text-slate-900 mb-1">
+              {editingAdminItemId ? 'Izmeni trošak' : 'Novi administrativni trošak'}
+            </h4>
             <p className="text-sm text-slate-500 mb-5">Iznos unesite u RSD.</p>
             <div className="space-y-4">
               <div>
@@ -505,17 +752,18 @@ export default function KalkulatorAdministrativnihTroskova({
               <div className="flex flex-col-reverse sm:flex-row gap-3 pt-2">
                 <button
                   type="button"
-                  onClick={() => setAddAdminModalOpen(false)}
+                  onClick={closeAdminModal}
                   className="flex-1 min-h-[48px] rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50"
                 >
                   Otkaži
                 </button>
                 <button
                   type="button"
-                  onClick={handleAddCustomAdmin}
-                  className="flex-1 min-h-[48px] rounded-xl bg-slate-800 px-4 py-3 text-sm font-semibold text-white hover:bg-slate-900"
+                  onClick={handleSubmitAdmin}
+                  disabled={!!adminSyncingId}
+                  className="flex-1 min-h-[48px] rounded-xl bg-slate-800 px-4 py-3 text-sm font-semibold text-white hover:bg-slate-900 disabled:opacity-60"
                 >
-                  Dodaj
+                  {editingAdminItemId ? 'Sačuvaj izmene' : 'Dodaj'}
                 </button>
               </div>
             </div>
@@ -535,7 +783,7 @@ export default function KalkulatorAdministrativnihTroskova({
                 <span className="truncate">{label}</span>
               </span>
               <span className="shrink-0 text-sm font-bold tabular-nums text-slate-900">
-                {formatMoney(groupTotal, currency)}
+                {formatRsd(groupTotal)}
               </span>
             </summary>
             <div className={accordionBodyClass}>
@@ -579,7 +827,7 @@ export default function KalkulatorAdministrativnihTroskova({
                       <div>
                         <p className="text-xs text-slate-500 uppercase tracking-wide">Iznos</p>
                         <p className="text-lg font-bold text-slate-900 tabular-nums">
-                          {formatMoney(line.amountRsd, currency)}
+                          {formatRsd(line.amountRsd)}
                         </p>
                       </div>
                       <span
@@ -592,13 +840,26 @@ export default function KalkulatorAdministrativnihTroskova({
                         {line.status === 'Plaćeno' ? 'Plaćeno' : 'U planu'}
                       </span>
                       {line.source === 'custom' && (
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveCustomAdmin(line.id)}
-                          className="text-sm font-medium text-red-600 hover:text-red-800 min-h-[44px] px-2"
-                        >
-                          Ukloni
-                        </button>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => openEditAdminModal(line)}
+                            disabled={!!adminSyncingId}
+                            className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+                          >
+                            <Pencil className="h-4 w-4 shrink-0" strokeWidth={2} aria-hidden />
+                            Izmeni
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveCustomAdmin(line.id)}
+                            disabled={!!adminSyncingId}
+                            className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50 hover:text-red-800 disabled:opacity-50"
+                          >
+                            <Trash2 className="h-4 w-4 shrink-0" strokeWidth={2} aria-hidden />
+                            Ukloni
+                          </button>
+                        </div>
                       )}
                     </div>
                   </div>
@@ -634,7 +895,7 @@ export default function KalkulatorAdministrativnihTroskova({
                   ))}
                 </Pie>
                 <Tooltip
-                  formatter={(value) => formatMoney(Number(value), currency)}
+                  formatter={(value) => formatRsd(Number(value))}
                   contentStyle={{ borderRadius: '12px', border: '1px solid #e2e8f0' }}
                 />
                 <Legend
@@ -646,7 +907,7 @@ export default function KalkulatorAdministrativnihTroskova({
           <div className="lg:w-72 shrink-0 rounded-2xl border border-blue-100 bg-blue-50/90 p-6 space-y-2">
             <p className="text-sm font-medium text-slate-600">Pregled administracije</p>
             <p className="text-xl font-bold text-slate-800 tabular-nums">
-              {formatMoney(ukupno, currency)}
+              {formatRsd(ukupno)}
             </p>
             {materialsTotal > 0 && (
               <>
@@ -654,7 +915,7 @@ export default function KalkulatorAdministrativnihTroskova({
                   Ukupno projekat (admin + materijal)
                 </p>
                 <p className="text-lg font-bold text-slate-900 tabular-nums">
-                  {formatMoney(ukupnoProjekat, currency)}
+                  {formatRsd(ukupnoProjekat)}
                 </p>
               </>
             )}
@@ -676,7 +937,7 @@ export default function KalkulatorAdministrativnihTroskova({
               Ukupno projektovano
             </p>
             <p className="text-2xl font-bold text-slate-900 tabular-nums">
-              {formatMoney(materialsFinance.ukupnoProjektovano, currency)}
+              {formatRsd(materialsFinance.ukupnoProjektovano)}
             </p>
           </div>
           <div className="rounded-xl border border-emerald-200 bg-emerald-50/90 p-4 sm:p-5 shadow-sm">
@@ -684,7 +945,7 @@ export default function KalkulatorAdministrativnihTroskova({
               Realizovano
             </p>
             <p className="text-2xl font-bold text-emerald-900 tabular-nums">
-              {formatMoney(materialsFinance.realizovano, currency)}
+              {formatRsd(materialsFinance.realizovano)}
             </p>
             <p className="text-[11px] text-emerald-800/70 mt-1">Suma stavki sa statusom „Plaćeno“</p>
           </div>
@@ -693,26 +954,28 @@ export default function KalkulatorAdministrativnihTroskova({
               Preostalo za plaćanje
             </p>
             <p className="text-2xl font-bold text-amber-950 tabular-nums">
-              {formatMoney(materialsFinance.preostalo, currency)}
+              {formatRsd(materialsFinance.preostalo)}
             </p>
           </div>
         </div>
 
         <div className="flex justify-center sm:justify-end mb-6">
-          <button
-            type="button"
-            onClick={() => setAddMaterialModalOpen(true)}
-            className={primaryActionBtnClass}
-          >
+          <button type="button" onClick={openAddMaterialModal} className={primaryActionBtnClass}>
             + Nova stavka
           </button>
         </div>
 
         {addMaterialModalOpen && (
-          <Modal onClose={() => setAddMaterialModalOpen(false)} panelClassName="max-w-lg">
+          <Modal onClose={closeMaterialModal} panelClassName="max-w-lg">
             <div className="pr-8">
-              <h4 className="text-lg font-bold text-slate-900 mb-1">Dodaj stavku</h4>
-              <p className="text-sm text-slate-500 mb-5">Unesite podatke za materijal ili radove.</p>
+              <h4 className="text-lg font-bold text-slate-900 mb-1">
+                {editingMaterialId ? 'Izmeni stavku' : 'Dodaj stavku'}
+              </h4>
+              <p className="text-sm text-slate-500 mb-5">
+                {editingMaterialId
+                  ? 'Izmenite podatke i sačuvajte.'
+                  : 'Unesite podatke za materijal ili radove.'}
+              </p>
               <div className="space-y-4">
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1.5">Kategorija</label>
@@ -798,17 +1061,18 @@ export default function KalkulatorAdministrativnihTroskova({
                 <div className="flex flex-col-reverse sm:flex-row gap-3 pt-2">
                   <button
                     type="button"
-                    onClick={() => setAddMaterialModalOpen(false)}
+                    onClick={closeMaterialModal}
                     className="flex-1 min-h-[48px] rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50 transition-colors"
                   >
                     Otkaži
                   </button>
                   <button
                     type="button"
-                    onClick={handleAddMaterial}
-                    className="flex-1 min-h-[48px] rounded-xl bg-slate-800 px-4 py-3 text-sm font-semibold text-white hover:bg-slate-900 transition-colors"
+                    onClick={handleSubmitMaterial}
+                    disabled={!!materialSyncingId}
+                    className="flex-1 min-h-[48px] rounded-xl bg-slate-800 px-4 py-3 text-sm font-semibold text-white hover:bg-slate-900 transition-colors disabled:opacity-60"
                   >
-                    Dodaj stavku
+                    {editingMaterialId ? 'Sačuvaj izmene' : 'Dodaj stavku'}
                   </button>
                 </div>
               </div>
@@ -836,7 +1100,7 @@ export default function KalkulatorAdministrativnihTroskova({
                     <span className="truncate">{label}</span>
                   </span>
                   <span className="shrink-0 text-sm font-bold tabular-nums text-slate-900">
-                    {formatMoney(groupTotal, currency)}
+                    {formatRsd(groupTotal)}
                   </span>
                 </summary>
                 <div className={accordionBodyClass}>
@@ -847,73 +1111,68 @@ export default function KalkulatorAdministrativnihTroskova({
                   ) : (
                     items.map((m) => (
                       <div key={m.id} className={itemCardClass}>
-                        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                          <div className="min-w-0 flex-1">
-                            <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
-                              Naziv stavke
-                            </p>
-                            <h4 className="font-semibold text-slate-900 leading-snug">{m.name}</h4>
-                            <dl className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2 text-sm">
-                              <div className="flex justify-between gap-2 sm:block">
-                                <dt className="text-slate-500">Količina</dt>
-                                <dd className="font-medium text-slate-800 tabular-nums text-right sm:text-left">
-                                  {Number(m.quantity).toLocaleString('sr-RS')}{' '}
-                                  <span className="text-slate-600 font-normal">
-                                    {m.unit ? m.unit : ''}
-                                  </span>
-                                </dd>
-                              </div>
-                              <div className="flex justify-between gap-2 sm:block">
-                                <dt className="text-slate-500">Jed. cena</dt>
-                                <dd className="font-medium tabular-nums text-slate-800 text-right sm:text-left">
-                                  {formatMoney(Number(m.unitPrice), currency)}
-                                </dd>
-                              </div>
-                            </dl>
-                          </div>
-                          <div className="shrink-0 w-full sm:w-auto sm:min-w-[160px]">
-                            <label className="sr-only" htmlFor={`status-${m.id}`}>
-                              Status
-                            </label>
-                            <select
-                              id={`status-${m.id}`}
-                              value={m.status === 'Plaćeno' ? 'Plaćeno' : 'U planu'}
-                              onChange={(e) =>
-                                handleMaterialStatusChange(
-                                  m.id,
-                                  e.target.value === 'Plaćeno' ? 'Plaćeno' : 'U planu'
-                                )
-                              }
-                              className={statusSelectClass}
-                            >
-                              <option value="U planu">U planu</option>
-                              <option value="Plaćeno">Plaćeno</option>
-                            </select>
-                          </div>
+                        <div className="min-w-0">
+                          <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                            Naziv stavke
+                          </p>
+                          <h4 className="font-semibold text-slate-900 leading-snug">{m.name}</h4>
                         </div>
-                        <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-3">
+                        <dl className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2 text-sm">
+                          <div className="flex justify-between gap-2 sm:block">
+                            <dt className="text-slate-500">Količina</dt>
+                            <dd className="font-medium text-slate-800 tabular-nums text-right sm:text-left">
+                              {Number(m.quantity).toLocaleString('sr-RS')}{' '}
+                              <span className="text-slate-600 font-normal">
+                                {m.unit ? m.unit : ''}
+                              </span>
+                            </dd>
+                          </div>
+                          <div className="flex justify-between gap-2 sm:block">
+                            <dt className="text-slate-500">Jed. cena</dt>
+                            <dd className="font-medium tabular-nums text-slate-800 text-right sm:text-left">
+                              {formatRsd(Number(m.unitPrice))}
+                            </dd>
+                          </div>
+                        </dl>
+                        <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-3">
                           <div>
                             <p className="text-xs text-slate-500 uppercase tracking-wide">Ukupno</p>
                             <p className="text-lg font-bold text-slate-900 tabular-nums">
-                              {formatMoney(Number(m.total), currency)}
+                              {formatRsd(Number(m.total))}
                             </p>
                           </div>
-                          <span
-                            className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold ${
+                          <button
+                            type="button"
+                            onClick={() => handleMaterialBadgeToggle(m)}
+                            disabled={!!materialSyncingId}
+                            className={`inline-flex min-h-[44px] items-center rounded-full px-3 py-2 text-xs font-semibold transition-opacity hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-sky-500 disabled:opacity-50 ${
                               m.status === 'Plaćeno'
                                 ? 'bg-emerald-100 text-emerald-900 border border-emerald-200'
                                 : 'bg-amber-50 text-amber-900 border border-amber-200'
                             }`}
                           >
                             {m.status === 'Plaćeno' ? 'Plaćeno' : 'U planu'}
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => handleRemoveMaterial(m.id)}
-                            className="text-sm font-medium text-red-600 hover:text-red-800 min-h-[44px] px-2"
-                          >
-                            Ukloni
                           </button>
+                          <div className="flex shrink-0 flex-wrap items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => openEditMaterialModal(m)}
+                              disabled={!!materialSyncingId}
+                              className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+                            >
+                              <Pencil className="h-4 w-4 shrink-0" strokeWidth={2} aria-hidden />
+                              Izmeni
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteMaterial(m)}
+                              disabled={!!materialSyncingId}
+                              className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50 hover:text-red-800 disabled:opacity-50"
+                            >
+                              <Trash2 className="h-4 w-4 shrink-0" strokeWidth={2} aria-hidden />
+                              Ukloni
+                            </button>
+                          </div>
                         </div>
                       </div>
                     ))
@@ -929,18 +1188,18 @@ export default function KalkulatorAdministrativnihTroskova({
           <ul className="space-y-2 text-sm">
             <li className="flex justify-between gap-4">
               <span className="text-slate-600">Administrativni troškovi</span>
-              <span className="font-semibold tabular-nums">{formatMoney(ukupno, currency)}</span>
+              <span className="font-semibold tabular-nums">{formatRsd(ukupno)}</span>
             </li>
             <li className="flex justify-between gap-4">
               <span className="text-slate-600">Materijal i radovi</span>
               <span className="font-semibold tabular-nums">
-                {formatMoney(materialsTotal, currency)}
+                {formatRsd(materialsTotal)}
               </span>
             </li>
             <li className="flex justify-between gap-4 pt-2 border-t border-sky-200 text-base">
               <span className="font-bold text-slate-800">Ukupno projekat</span>
               <span className="font-bold text-slate-900 tabular-nums">
-                {formatMoney(ukupnoProjekat, currency)}
+                {formatRsd(ukupnoProjekat)}
               </span>
             </li>
           </ul>
