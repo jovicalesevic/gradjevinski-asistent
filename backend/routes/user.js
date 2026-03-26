@@ -4,25 +4,29 @@ import User from '../models/User.js';
 
 const router = express.Router();
 
+/** Zbir polja `iznos` za sve administrativne stavke u jednom proračunu. */
 function sumAdminItems(items) {
   if (!Array.isArray(items)) return 0;
   return items.reduce((s, i) => s + (Number(i?.iznos) || 0), 0);
 }
 
+/** Zbir polja `total` za sve stavke materijala u jednom proračunu. */
 function sumMaterials(materials) {
   if (!Array.isArray(materials)) return 0;
   return materials.reduce((s, m) => s + (Number(m?.total) || 0), 0);
 }
 
+/** Nakon izmene stavki postavlja `totalAmount` na admin + materijal. */
 function recalculateCalculationTotal(calculation) {
   calculation.totalAmount = sumAdminItems(calculation.items) + sumMaterials(calculation.materials);
 }
 
+/** Provera da li string može biti Mongo ObjectId (24 hex). */
 function isValidObjectId(id) {
   return mongoose.Types.ObjectId.isValid(id);
 }
 
-// GET /api/user/calculations/:email - Get saved calculations for a user
+// GET /api/user/calculations/:email — lista sačuvanih proračuna korisnika (savedCalculations)
 router.get('/calculations/:email', async (req, res) => {
   try {
     console.log('Fetching calculations for:', req.params.email);
@@ -43,7 +47,7 @@ router.get('/calculations/:email', async (req, res) => {
   }
 });
 
-// DELETE /api/user/calculations/:email/:calculationId - Delete a saved calculation
+// DELETE /api/user/calculations/:email/:calculationId — briše jedan sačuvani proračun
 router.delete('/calculations/:email/:calculationId', async (req, res) => {
   try {
     const email = decodeURIComponent(req.params.email);
@@ -70,7 +74,7 @@ router.delete('/calculations/:email/:calculationId', async (req, res) => {
   }
 });
 
-// PATCH /api/user/calculations/:email/:calculationId/status - Update payment status
+// PATCH /api/user/calculations/:email/:calculationId/status — menja paymentStatus celog proračuna
 router.patch('/calculations/:email/:calculationId/status', async (req, res) => {
   try {
     const email = decodeURIComponent(req.params.email);
@@ -125,12 +129,15 @@ router.put('/calculations/:email/:calculationId/items/:itemId', async (req, res)
       return res.status(404).json({ error: 'Administrativna stavka nije pronađena.' });
     }
 
-    const { vrsta, iznos, category, status } = req.body;
+    const { vrsta, iznos, category, status, imageUrl } = req.body;
     if (vrsta !== undefined) sub.vrsta = String(vrsta).trim();
     if (iznos !== undefined) sub.iznos = Number(iznos) || 0;
     if (category !== undefined) sub.category = String(category || '').trim();
     if (status !== undefined) {
       sub.status = status === 'Plaćeno' ? 'Plaćeno' : 'U planu';
+    }
+    if (imageUrl !== undefined) {
+      sub.imageUrl = String(imageUrl ?? '').trim();
     }
 
     recalculateCalculationTotal(calculation);
@@ -208,7 +215,7 @@ router.put('/calculations/:email/:calculationId/materials/:materialId', async (r
       return res.status(404).json({ error: 'Materijal nije pronađen.' });
     }
 
-    const { name, unit, quantity, unitPrice, total, category, status } = req.body;
+    const { name, unit, quantity, unitPrice, total, category, status, imageUrl } = req.body;
     if (name !== undefined) sub.name = String(name).trim();
     if (unit !== undefined) sub.unit = String(unit || '').trim();
     if (quantity !== undefined) sub.quantity = Math.max(0, Number(quantity) || 0);
@@ -216,6 +223,9 @@ router.put('/calculations/:email/:calculationId/materials/:materialId', async (r
     if (category !== undefined) sub.category = String(category || '').trim() || 'ostalo';
     if (status !== undefined) {
       sub.status = status === 'Plaćeno' ? 'Plaćeno' : 'U planu';
+    }
+    if (imageUrl !== undefined) {
+      sub.imageUrl = String(imageUrl ?? '').trim();
     }
 
     if (quantity !== undefined || unitPrice !== undefined) {
@@ -277,7 +287,7 @@ router.delete('/calculations/:email/:calculationId/materials/:materialId', async
   }
 });
 
-// POST /api/user/save-calculation - Add a calculation to the user's savedCalculations
+// POST /api/user/save-calculation — dodaje nov proračun u niz savedCalculations (admin + materijal)
 router.post('/save-calculation', async (req, res) => {
   try {
     const { userId, email, title, items, location, materials } = req.body;
@@ -307,6 +317,7 @@ router.post('/save-calculation', async (req, res) => {
         iznos: Number(item.iznos ?? item.amount ?? item.cost ?? 0) || 0,
         category: String(item.category || '').trim(),
         status: item.status === 'Plaćeno' ? 'Plaćeno' : 'U planu',
+        imageUrl: String(item.imageUrl ?? '').trim(),
       }));
 
     const rawMaterials = Array.isArray(materials) ? materials : [];
@@ -327,6 +338,7 @@ router.post('/save-calculation', async (req, res) => {
           total: lineTotal,
           category: rawCat || 'ostalo',
           status,
+          imageUrl: String(m.imageUrl ?? '').trim(),
         };
       });
 

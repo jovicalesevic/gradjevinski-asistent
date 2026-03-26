@@ -1,21 +1,23 @@
-import { useState, useMemo, useCallback } from 'react'
+import { useState, useMemo, useCallback, memo, useRef } from 'react'
 import axios from 'axios'
 import { ChevronDown, Pencil, Trash2 } from 'lucide-react'
 import { API_USER_BASE } from '../config/api.js'
-import {
-  MATERIAL_CATEGORIES,
-  DEFAULT_MATERIAL_CATEGORY_ID,
-  normalizeCategoryId,
-} from '../data/materialCategories.js'
+import { MATERIAL_CATEGORIES, normalizeCategoryId } from '../data/materialCategories.js'
 import {
   ADMIN_COST_CATEGORIES,
   ADMIN_TEMPLATE_ITEM_DEFS,
-  DEFAULT_ADMIN_CATEGORY_ID,
   computeTemplateItemRsd,
   normalizeAdminCategoryId,
 } from '../data/adminCostCategories.js'
-import Modal from './Modal'
+import AddEditModal from './AddEditModal'
+import SummaryDashboard from './SummaryDashboard'
+import CostCard from './CostCard'
 import { PieChart, Pie, Cell, ResponsiveContainer, Legend, Tooltip } from 'recharts'
+
+/**
+ * Kalkulator administrativnih troškova + materijala: lokalno stanje, sinhronizacija sa
+ * `/api/user/calculations/...` kada postoji sačuvan proračun (`syncedCalculationId`).
+ */
 
 const inputClasses =
   'w-full min-h-[48px] px-4 py-3 rounded-xl border border-slate-200 bg-white text-slate-700 shadow-sm focus:ring-2 focus:ring-sky-500 focus:border-sky-500 transition-shadow outline-none'
@@ -35,10 +37,167 @@ const primaryActionBtnClass =
 
 const CHART_COLORS = ['#0088FE', '#00C49F', '#D35400', '#8884d8']
 
+/** Jedinstveni stil za Izmeni / Ukloni u obe sekcije */
+const btnEditSecondaryClass =
+  'inline-flex min-h-[44px] items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-slate-700 bg-transparent hover:bg-slate-100 disabled:opacity-50 disabled:pointer-events-none transition-colors'
+const btnDeleteSecondaryClass =
+  'inline-flex min-h-[44px] items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-red-600 bg-transparent hover:bg-red-50 hover:text-red-800 disabled:opacity-50 disabled:pointer-events-none transition-colors'
+
+/**
+ * Zbir svih iznosa, zbir plaćenih i preostalo (ukupno − plaćeno).
+ * Koristi se za administrativni i materijalni „dashboard”.
+ */
+function sumTotalsWithPaidFlag(items, getAmount, getIsPaid) {
+  let total = 0
+  let paid = 0
+  for (const item of items) {
+    const amt = Number(getAmount(item)) || 0
+    total += amt
+    if (getIsPaid(item)) paid += amt
+  }
+  return {
+    total,
+    paid,
+    pending: Math.max(0, total - paid),
+  }
+}
+
 function formatRsd(amount) {
   const n = Number(amount) || 0
   return `${n.toLocaleString('sr-RS')} RSD`
 }
+
+/**
+ * Kartica jedne stavke materijala — memo da izmena jedne stavke ne forsira re-render ostalih.
+ */
+const MaterialLineCard = memo(function MaterialLineCard({
+  item: m,
+  isSyncing,
+  onEdit,
+  onDelete,
+  onToggle,
+}) {
+  return (
+    <div className={itemCardClass}>
+      <div className="min-w-0">
+        <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Naziv stavke</p>
+        <h4 className="font-semibold text-slate-900 leading-snug">{m.name}</h4>
+      </div>
+      <dl className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2 text-sm">
+        <div className="flex justify-between gap-2 sm:block">
+          <dt className="text-slate-500">Količina</dt>
+          <dd className="font-medium text-slate-800 tabular-nums text-right sm:text-left">
+            {Number(m.quantity).toLocaleString('sr-RS')}{' '}
+            <span className="text-slate-600 font-normal">{m.unit ? m.unit : ''}</span>
+          </dd>
+        </div>
+        <div className="flex justify-between gap-2 sm:block">
+          <dt className="text-slate-500">Jed. cena</dt>
+          <dd className="font-medium tabular-nums text-slate-800 text-right sm:text-left">
+            {formatRsd(Number(m.unitPrice))}
+          </dd>
+        </div>
+      </dl>
+      <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-3">
+        <div>
+          <p className="text-xs text-slate-500 uppercase tracking-wide">Ukupno</p>
+          <p className="text-lg font-bold text-slate-900 tabular-nums">{formatRsd(Number(m.total))}</p>
+        </div>
+        <button
+          type="button"
+          onClick={() => onToggle(m.id)}
+          disabled={isSyncing}
+          className={`inline-flex min-h-[44px] items-center rounded-full px-3 py-2 text-xs font-semibold transition-opacity hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-sky-500 disabled:opacity-50 ${
+            m.status === 'Plaćeno'
+              ? 'bg-emerald-100 text-emerald-900 border border-emerald-200'
+              : 'bg-amber-50 text-amber-900 border border-amber-200'
+          }`}
+        >
+          {m.status === 'Plaćeno' ? 'Plaćeno' : 'U planu'}
+        </button>
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => onEdit(m.id)}
+            disabled={isSyncing}
+            className={btnEditSecondaryClass}
+          >
+            <Pencil className="h-4 w-4 shrink-0" strokeWidth={2} aria-hidden />
+            Izmeni
+          </button>
+          <button
+            type="button"
+            onClick={() => onDelete(m.id)}
+            disabled={isSyncing}
+            className={btnDeleteSecondaryClass}
+          >
+            <Trash2 className="h-4 w-4 shrink-0" strokeWidth={2} aria-hidden />
+            Ukloni
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+})
+
+/**
+ * Šablonska admin. stavka — memo da promena druge stavke ili materijala ne re-renderuje sve redove.
+ */
+const AdminTemplateLineCard = memo(function AdminTemplateLineCard({
+  lineId,
+  label,
+  amountRsd,
+  status,
+  onStatusChange,
+}) {
+  const handleSelectChange = useCallback(
+    (e) => {
+      const v = e.target.value === 'Plaćeno' ? 'Plaćeno' : 'U planu'
+      onStatusChange(lineId, v)
+    },
+    [lineId, onStatusChange]
+  )
+
+  return (
+    <div className={itemCardClass}>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0 flex-1">
+          <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Naziv troška</p>
+          <h4 className="font-semibold text-slate-900 leading-snug">{label}</h4>
+        </div>
+        <div className="shrink-0 w-full sm:w-auto sm:min-w-[160px]">
+          <label className="sr-only" htmlFor={`adm-status-${lineId}`}>
+            Status
+          </label>
+          <select
+            id={`adm-status-${lineId}`}
+            value={status}
+            onChange={handleSelectChange}
+            className={statusSelectClass}
+          >
+            <option value="U planu">U planu</option>
+            <option value="Plaćeno">Plaćeno</option>
+          </select>
+        </div>
+      </div>
+      <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-3">
+        <div>
+          <p className="text-xs text-slate-500 uppercase tracking-wide">Iznos</p>
+          <p className="text-lg font-bold text-slate-900 tabular-nums">{formatRsd(amountRsd)}</p>
+        </div>
+        <span
+          className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold ${
+            status === 'Plaćeno'
+              ? 'bg-emerald-100 text-emerald-900 border border-emerald-200'
+              : 'bg-amber-50 text-amber-900 border border-amber-200'
+          }`}
+        >
+          {status === 'Plaćeno' ? 'Plaćeno' : 'U planu'}
+        </span>
+      </div>
+    </div>
+  )
+})
 
 function isMongoId(id) {
   return typeof id === 'string' && /^[a-f0-9]{24}$/i.test(id)
@@ -54,6 +213,7 @@ function mapServerMaterialsToLocal(materials) {
     unitPrice: Number(m.unitPrice) || 0,
     total: Number(m.total) || 0,
     status: m.status === 'Plaćeno' ? 'Plaćeno' : 'U planu',
+    imageUrl: m.imageUrl || '',
   }))
 }
 
@@ -74,6 +234,7 @@ function mapServerCustomAdminItems(calc) {
       name: si.vrsta,
       amountRsd: Number(si.iznos) || 0,
       status: si.status === 'Plaćeno' ? 'Plaćeno' : 'U planu',
+      imageUrl: si.imageUrl || '',
     }))
 }
 
@@ -82,6 +243,10 @@ function customAdminFromSavedResponse(savedCalculations, calcId) {
   return c ? mapServerCustomAdminItems(c) : null
 }
 
+/**
+ * Stranica kalkulatora: šablonski + ručni admin. troškovi, materijal po kategorijama,
+ * dijagram i rezime; prijavljeni korisnik može da sačuva proračun na profil.
+ */
 export default function KalkulatorAdministrativnihTroskova({
   isLoggedIn,
   objectType,
@@ -94,15 +259,11 @@ export default function KalkulatorAdministrativnihTroskova({
 
   const [adminItemStatus, setAdminItemStatus] = useState({})
   const [customAdminItems, setCustomAdminItems] = useState([])
+  const customAdminRef = useRef(customAdminItems)
+  customAdminRef.current = customAdminItems
   const [addAdminModalOpen, setAddAdminModalOpen] = useState(false)
   const [editingAdminItemId, setEditingAdminItemId] = useState(null)
   const [adminSyncingId, setAdminSyncingId] = useState(null)
-  const [adminDraft, setAdminDraft] = useState({
-    categoryId: DEFAULT_ADMIN_CATEGORY_ID,
-    name: '',
-    amount: '',
-    status: 'U planu',
-  })
 
   const m2 = parseFloat(kvadratura) || 0
 
@@ -134,16 +295,16 @@ export default function KalkulatorAdministrativnihTroskova({
     [adminItemStatus]
   )
 
-  const adminFinance = useMemo(() => {
-    let total = 0
-    let placeno = 0
-    for (const line of adminLinesFlat) {
-      const amt = line.amountRsd
-      total += amt
-      if (getLineStatus(line) === 'Plaćeno') placeno += amt
-    }
-    return { total, placeno, preostalo: Math.max(0, total - placeno) }
-  }, [adminLinesFlat, getLineStatus])
+  /** Zbir admin. linija: ukupno / plaćeno / preostalo */
+  const adminFinance = useMemo(
+    () =>
+      sumTotalsWithPaidFlag(
+        adminLinesFlat,
+        (line) => line.amountRsd,
+        (line) => getLineStatus(line) === 'Plaćeno'
+      ),
+    [adminLinesFlat, getLineStatus]
+  )
 
   const adminByCategory = useMemo(() => {
     const buckets = Object.fromEntries(ADMIN_COST_CATEGORIES.map((c) => [c.id, []]))
@@ -164,17 +325,49 @@ export default function KalkulatorAdministrativnihTroskova({
     [adminLinesFlat]
   )
 
+  /** Stavke za POST save-calculation — uključuje imageUrl za ručne stavke */
+  const itemsPayloadForSave = useMemo(() => {
+    return adminLinesFlat.map((line) => {
+      const status =
+        line.source === 'custom'
+          ? line.status === 'Plaćeno'
+            ? 'Plaćeno'
+            : 'U planu'
+          : getLineStatus(line) === 'Plaćeno'
+            ? 'Plaćeno'
+            : 'U planu'
+      const imageUrl =
+        line.source === 'custom'
+          ? customAdminItems.find((x) => x.id === line.id)?.imageUrl ?? ''
+          : ''
+      return {
+        vrsta: line.label,
+        iznos: line.amountRsd,
+        category: line.categoryId,
+        status,
+        imageUrl,
+      }
+    })
+  }, [adminLinesFlat, customAdminItems, getLineStatus])
+
   const ukupno = adminFinance.total
 
-  const [materialDraft, setMaterialDraft] = useState({
-    categoryId: DEFAULT_MATERIAL_CATEGORY_ID,
-    name: '',
-    unit: '',
-    quantity: '',
-    unitPrice: '',
-    status: 'U planu',
-  })
+  const adminModalInitialValues = useMemo(() => {
+    if (!editingAdminItemId) return null
+    const c = customAdminItems.find((x) => x.id === editingAdminItemId)
+    if (!c) return null
+    return {
+      categoryId: normalizeAdminCategoryId(c.categoryId),
+      name: c.name,
+      amount: String(c.amountRsd ?? ''),
+      status: c.status === 'Plaćeno' ? 'Plaćeno' : 'U planu',
+      imageUrl: c.imageUrl || '',
+    }
+  }, [editingAdminItemId, customAdminItems])
+
   const [materials, setMaterials] = useState([])
+  const materialsRef = useRef(materials)
+  materialsRef.current = materials
   const [addMaterialModalOpen, setAddMaterialModalOpen] = useState(false)
   /** Poslednji sačuvan proračun na serveru — omogućava PUT/DELETE materijala po Mongo ID-u */
   const [syncedCalculationId, setSyncedCalculationId] = useState(null)
@@ -182,20 +375,31 @@ export default function KalkulatorAdministrativnihTroskova({
   const [editingMaterialId, setEditingMaterialId] = useState(null)
   const [materialSyncingId, setMaterialSyncingId] = useState(null)
 
-  const materialsTotal = useMemo(
-    () => materials.reduce((sum, m) => sum + (Number(m.total) || 0), 0),
+  const materialModalInitialValues = useMemo(() => {
+    if (!editingMaterialId) return null
+    const m = materials.find((x) => x.id === editingMaterialId)
+    if (!m) return null
+    return {
+      categoryId: normalizeCategoryId(m.categoryId),
+      name: m.name,
+      unit: m.unit || '',
+      quantity: String(m.quantity ?? ''),
+      unitPrice: String(m.unitPrice ?? ''),
+      status: m.status === 'Plaćeno' ? 'Plaćeno' : 'U planu',
+      imageUrl: m.imageUrl || '',
+    }
+  }, [editingMaterialId, materials])
+
+  /** Zbir materijala: ukupno / plaćeno / preostalo (isti oblik kao adminFinance) */
+  const materialsFinance = useMemo(
+    () =>
+      sumTotalsWithPaidFlag(
+        materials,
+        (m) => m.total,
+        (m) => m.status === 'Plaćeno'
+      ),
     [materials]
   )
-
-  const materialsFinance = useMemo(() => {
-    const ukupnoProjektovano = materials.reduce((s, m) => s + (Number(m.total) || 0), 0)
-    const realizovano = materials.reduce(
-      (sum, m) => sum + (m.status === 'Plaćeno' ? Number(m.total) || 0 : 0),
-      0
-    )
-    const preostalo = Math.max(0, ukupnoProjektovano - realizovano)
-    return { ukupnoProjektovano, realizovano, preostalo }
-  }, [materials])
 
   const materialsByCategory = useMemo(() => {
     const buckets = Object.fromEntries(MATERIAL_CATEGORIES.map((c) => [c.id, []]))
@@ -211,7 +415,7 @@ export default function KalkulatorAdministrativnihTroskova({
     }))
   }, [materials])
 
-  const ukupnoProjekat = ukupno + materialsTotal
+  const ukupnoProjekat = ukupno + materialsFinance.total
 
   const chartData = troskovi.map((item) => ({
     name: item.vrsta,
@@ -220,65 +424,34 @@ export default function KalkulatorAdministrativnihTroskova({
 
   const [saving, setSaving] = useState(false)
 
-  const handleTemplateStatusChange = (lineId, status) => {
+  const handleTemplateStatusChange = useCallback((lineId, status) => {
     setAdminItemStatus((prev) => ({
       ...prev,
       [lineId]: status === 'Plaćeno' ? 'Plaćeno' : 'U planu',
     }))
-  }
+  }, [])
 
-  const handleCustomAdminStatusChange = (id, status) => {
+  const handleCustomAdminStatusChange = useCallback((id, status) => {
     setCustomAdminItems((prev) =>
       prev.map((c) =>
         c.id === id ? { ...c, status: status === 'Plaćeno' ? 'Plaćeno' : 'U planu' } : c
       )
     )
-  }
-
-  const resetAdminDraft = useCallback(() => {
-    setAdminDraft({
-      categoryId: DEFAULT_ADMIN_CATEGORY_ID,
-      name: '',
-      amount: '',
-      status: 'U planu',
-    })
   }, [])
 
   const closeAdminModal = useCallback(() => {
     setAddAdminModalOpen(false)
     setEditingAdminItemId(null)
-    resetAdminDraft()
-  }, [resetAdminDraft])
+  }, [])
 
   const openAddAdminModal = () => {
     setEditingAdminItemId(null)
-    resetAdminDraft()
     setAddAdminModalOpen(true)
   }
 
-  const openEditAdminModal = (line) => {
-    if (line.source !== 'custom') return
-    const c = customAdminItems.find((x) => x.id === line.id)
-    if (!c) return
-    setEditingAdminItemId(c.id)
-    setAdminDraft({
-      categoryId: normalizeAdminCategoryId(c.categoryId),
-      name: c.name,
-      amount: String(c.amountRsd ?? ''),
-      status: c.status === 'Plaćeno' ? 'Plaćeno' : 'U planu',
-    })
-    setAddAdminModalOpen(true)
-  }
-
-  const handleSubmitAdmin = async () => {
-    const name = adminDraft.name.trim()
-    if (!name) {
-      alert('Unesite naziv troška.')
-      return
-    }
-    const amountRsd = Math.max(0, Number(adminDraft.amount) || 0)
-    const categoryId = normalizeAdminCategoryId(adminDraft.categoryId)
-    const status = adminDraft.status === 'Plaćeno' ? 'Plaćeno' : 'U planu'
+  /** Dodavanje/izmena ručne admin. stavke (validacija u AddEditModal; lokalno ili PUT) */
+  const handleSubmitAdmin = useCallback(
+    async ({ name, amountRsd, categoryId, status, imageUrl }) => {
     const email = localStorage.getItem('userEmail')
 
     if (editingAdminItemId) {
@@ -297,6 +470,7 @@ export default function KalkulatorAdministrativnihTroskova({
               iznos: amountRsd,
               category: categoryId,
               status,
+              imageUrl: imageUrl || '',
             }
           )
           const merged = customAdminFromSavedResponse(data?.savedCalculations, syncedCalculationId)
@@ -305,7 +479,7 @@ export default function KalkulatorAdministrativnihTroskova({
             setCustomAdminItems((prev) =>
               prev.map((c) =>
                 c.id === editingAdminItemId
-                  ? { ...c, name, amountRsd, categoryId, status }
+                  ? { ...c, name, amountRsd, categoryId, status, imageUrl: imageUrl || '' }
                   : c
               )
             )
@@ -320,7 +494,7 @@ export default function KalkulatorAdministrativnihTroskova({
         setCustomAdminItems((prev) =>
           prev.map((c) =>
             c.id === editingAdminItemId
-              ? { ...c, name, amountRsd, categoryId, status }
+              ? { ...c, name, amountRsd, categoryId, status, imageUrl: imageUrl || '' }
               : c
           )
         )
@@ -337,82 +511,79 @@ export default function KalkulatorAdministrativnihTroskova({
         name,
         amountRsd,
         status,
+        imageUrl: imageUrl || '',
       },
     ])
     closeAdminModal()
-  }
+  },
+    [
+      editingAdminItemId,
+      isLoggedIn,
+      syncedCalculationId,
+      closeAdminModal,
+      onCalculationSaved,
+    ]
+  )
 
-  const handleRemoveCustomAdmin = async (id) => {
-    if (!window.confirm('Da li si siguran?')) return
-    const email = localStorage.getItem('userEmail')
+  const handleRemoveCustomAdmin = useCallback(
+    async (id) => {
+      if (!window.confirm('Da li si siguran?')) return
+      const email = localStorage.getItem('userEmail')
 
-    if (isLoggedIn && email && syncedCalculationId && isMongoId(id)) {
-      setAdminSyncingId(id)
-      try {
-        const { data } = await axios.delete(
-          `${API_USER_BASE}/calculations/${encodeURIComponent(email)}/${syncedCalculationId}/items/${id}`
-        )
-        const merged = customAdminFromSavedResponse(data?.savedCalculations, syncedCalculationId)
-        if (merged) setCustomAdminItems(merged)
-        else setCustomAdminItems((prev) => prev.filter((c) => c.id !== id))
-        onCalculationSaved?.()
-      } catch (err) {
-        alert(err.response?.data?.error || 'Greška pri brisanju troška.')
-      } finally {
-        setAdminSyncingId(null)
+      if (isLoggedIn && email && syncedCalculationId && isMongoId(id)) {
+        setAdminSyncingId(id)
+        try {
+          const { data } = await axios.delete(
+            `${API_USER_BASE}/calculations/${encodeURIComponent(email)}/${syncedCalculationId}/items/${id}`
+          )
+          const merged = customAdminFromSavedResponse(data?.savedCalculations, syncedCalculationId)
+          if (merged) setCustomAdminItems(merged)
+          else setCustomAdminItems((prev) => prev.filter((c) => c.id !== id))
+          onCalculationSaved?.()
+        } catch (err) {
+          alert(err.response?.data?.error || 'Greška pri brisanju troška.')
+        } finally {
+          setAdminSyncingId(null)
+        }
+      } else {
+        setCustomAdminItems((prev) => prev.filter((c) => c.id !== id))
       }
-    } else {
-      setCustomAdminItems((prev) => prev.filter((c) => c.id !== id))
-    }
-  }
+    },
+    [isLoggedIn, syncedCalculationId, onCalculationSaved]
+  )
 
-  const resetMaterialDraft = useCallback(() => {
-    setMaterialDraft({
-      categoryId: DEFAULT_MATERIAL_CATEGORY_ID,
-      name: '',
-      unit: '',
-      quantity: '',
-      unitPrice: '',
-      status: 'U planu',
-    })
+  /** Otvaranje modala za izmenu ručne stavke — ref da callback ostane stabilan za memo kartice */
+  const handleCustomAdminEditById = useCallback((id) => {
+    if (!customAdminRef.current.find((x) => x.id === id)) return
+    setEditingAdminItemId(id)
+    setAddAdminModalOpen(true)
   }, [])
+
+  const handleCustomAdminDeleteById = useCallback(
+    (id) => {
+      void handleRemoveCustomAdmin(id)
+    },
+    [handleRemoveCustomAdmin]
+  )
 
   const closeMaterialModal = useCallback(() => {
     setAddMaterialModalOpen(false)
     setEditingMaterialId(null)
-    resetMaterialDraft()
-  }, [resetMaterialDraft])
+  }, [])
 
   const openAddMaterialModal = () => {
     setEditingMaterialId(null)
-    resetMaterialDraft()
     setAddMaterialModalOpen(true)
   }
 
-  const openEditMaterialModal = (m) => {
+  const openEditMaterialModal = useCallback((m) => {
     setEditingMaterialId(m.id)
-    setMaterialDraft({
-      categoryId: normalizeCategoryId(m.categoryId),
-      name: m.name,
-      unit: m.unit || '',
-      quantity: String(m.quantity ?? ''),
-      unitPrice: String(m.unitPrice ?? ''),
-      status: m.status === 'Plaćeno' ? 'Plaćeno' : 'U planu',
-    })
     setAddMaterialModalOpen(true)
-  }
+  }, [])
 
-  const handleSubmitMaterial = async () => {
-    const name = materialDraft.name.trim()
-    if (!name) {
-      alert('Unesite naziv materijala.')
-      return
-    }
-    const quantity = Math.max(0, Number(materialDraft.quantity) || 0)
-    const unitPrice = Math.max(0, Number(materialDraft.unitPrice) || 0)
-    const total = quantity * unitPrice
-    const categoryId = normalizeCategoryId(materialDraft.categoryId)
-    const status = materialDraft.status === 'Plaćeno' ? 'Plaćeno' : 'U planu'
+  /** Dodavanje/izmena stavke materijala (validacija u AddEditModal) */
+  const handleSubmitMaterial = useCallback(
+    async ({ name, unit, quantity, unitPrice, total, categoryId, status, imageUrl }) => {
     const email = localStorage.getItem('userEmail')
 
     if (editingMaterialId) {
@@ -429,12 +600,13 @@ export default function KalkulatorAdministrativnihTroskova({
             `${API_USER_BASE}/calculations/${encodeURIComponent(email)}/${syncedCalculationId}/materials/${editingMaterialId}`,
             {
               name,
-              unit: materialDraft.unit.trim(),
+              unit,
               quantity,
               unitPrice,
               total,
               category: categoryId,
               status,
+              imageUrl: imageUrl || '',
             }
           )
           const merged = materialsFromSavedResponse(data?.savedCalculations, syncedCalculationId)
@@ -443,7 +615,7 @@ export default function KalkulatorAdministrativnihTroskova({
             setMaterials((prev) =>
               prev.map((m) =>
                 m.id === editingMaterialId
-                  ? { ...m, name, unit: materialDraft.unit.trim(), quantity, unitPrice, total, categoryId, status }
+                  ? { ...m, name, unit, quantity, unitPrice, total, categoryId, status, imageUrl: imageUrl || '' }
                   : m
               )
             )
@@ -458,7 +630,7 @@ export default function KalkulatorAdministrativnihTroskova({
         setMaterials((prev) =>
           prev.map((m) =>
             m.id === editingMaterialId
-              ? { ...m, name, unit: materialDraft.unit.trim(), quantity, unitPrice, total, categoryId, status }
+              ? { ...m, name, unit, quantity, unitPrice, total, categoryId, status, imageUrl: imageUrl || '' }
               : m
           )
         )
@@ -473,65 +645,106 @@ export default function KalkulatorAdministrativnihTroskova({
         id: crypto.randomUUID?.() ?? `m-${Date.now()}-${prev.length}`,
         categoryId,
         name,
-        unit: materialDraft.unit.trim(),
+        unit,
         quantity,
         unitPrice,
         total,
         status,
+        imageUrl: imageUrl || '',
       },
     ])
     closeMaterialModal()
-  }
+  },
+    [
+      editingMaterialId,
+      isLoggedIn,
+      syncedCalculationId,
+      closeMaterialModal,
+      onCalculationSaved,
+    ]
+  )
 
-  const handleDeleteMaterial = async (m) => {
-    if (!window.confirm('Da li si siguran?')) return
-    const email = localStorage.getItem('userEmail')
+  const handleDeleteMaterial = useCallback(
+    async (m) => {
+      if (!window.confirm('Da li si siguran?')) return
+      const email = localStorage.getItem('userEmail')
 
-    if (isLoggedIn && email && syncedCalculationId && isMongoId(m.id)) {
-      setMaterialSyncingId(m.id)
-      try {
-        const { data } = await axios.delete(
-          `${API_USER_BASE}/calculations/${encodeURIComponent(email)}/${syncedCalculationId}/materials/${m.id}`
-        )
-        const merged = materialsFromSavedResponse(data?.savedCalculations, syncedCalculationId)
-        if (merged) setMaterials(merged)
-        else setMaterials((prev) => prev.filter((x) => x.id !== m.id))
-        onCalculationSaved?.()
-      } catch (err) {
-        alert(err.response?.data?.error || 'Greška pri brisanju stavke.')
-      } finally {
-        setMaterialSyncingId(null)
+      if (isLoggedIn && email && syncedCalculationId && isMongoId(m.id)) {
+        setMaterialSyncingId(m.id)
+        try {
+          const { data } = await axios.delete(
+            `${API_USER_BASE}/calculations/${encodeURIComponent(email)}/${syncedCalculationId}/materials/${m.id}`
+          )
+          const merged = materialsFromSavedResponse(data?.savedCalculations, syncedCalculationId)
+          if (merged) setMaterials(merged)
+          else setMaterials((prev) => prev.filter((x) => x.id !== m.id))
+          onCalculationSaved?.()
+        } catch (err) {
+          alert(err.response?.data?.error || 'Greška pri brisanju stavke.')
+        } finally {
+          setMaterialSyncingId(null)
+        }
+      } else {
+        setMaterials((prev) => prev.filter((x) => x.id !== m.id))
       }
-    } else {
-      setMaterials((prev) => prev.filter((x) => x.id !== m.id))
-    }
-  }
+    },
+    [isLoggedIn, syncedCalculationId, onCalculationSaved]
+  )
 
-  const handleMaterialBadgeToggle = async (m) => {
-    const next = m.status === 'Plaćeno' ? 'U planu' : 'Plaćeno'
-    const email = localStorage.getItem('userEmail')
+  const handleMaterialBadgeToggle = useCallback(
+    async (m) => {
+      const next = m.status === 'Plaćeno' ? 'U planu' : 'Plaćeno'
+      const email = localStorage.getItem('userEmail')
 
-    if (isLoggedIn && email && syncedCalculationId && isMongoId(m.id)) {
-      setMaterialSyncingId(m.id)
-      try {
-        const { data } = await axios.put(
-          `${API_USER_BASE}/calculations/${encodeURIComponent(email)}/${syncedCalculationId}/materials/${m.id}`,
-          { status: next }
-        )
-        const merged = materialsFromSavedResponse(data?.savedCalculations, syncedCalculationId)
-        if (merged) setMaterials(merged)
-        else setMaterials((prev) => prev.map((x) => (x.id === m.id ? { ...x, status: next } : x)))
-        onCalculationSaved?.()
-      } catch (err) {
-        alert(err.response?.data?.error || 'Greška pri promeni statusa.')
-      } finally {
-        setMaterialSyncingId(null)
+      if (isLoggedIn && email && syncedCalculationId && isMongoId(m.id)) {
+        setMaterialSyncingId(m.id)
+        try {
+          const { data } = await axios.put(
+            `${API_USER_BASE}/calculations/${encodeURIComponent(email)}/${syncedCalculationId}/materials/${m.id}`,
+            { status: next }
+          )
+          const merged = materialsFromSavedResponse(data?.savedCalculations, syncedCalculationId)
+          if (merged) setMaterials(merged)
+          else setMaterials((prev) => prev.map((x) => (x.id === m.id ? { ...x, status: next } : x)))
+          onCalculationSaved?.()
+        } catch (err) {
+          alert(err.response?.data?.error || 'Greška pri promeni statusa.')
+        } finally {
+          setMaterialSyncingId(null)
+        }
+      } else {
+        setMaterials((prev) => prev.map((x) => (x.id === m.id ? { ...x, status: next } : x)))
       }
-    } else {
-      setMaterials((prev) => prev.map((x) => (x.id === m.id ? { ...x, status: next } : x)))
-    }
-  }
+    },
+    [isLoggedIn, syncedCalculationId, onCalculationSaved]
+  )
 
+  /** Stabilni callback-i (id) + ref na listu — memo kartice se ne re-renderuju bez potrebe */
+  const handleMaterialEditById = useCallback(
+    (id) => {
+      const m = materialsRef.current.find((x) => x.id === id)
+      if (m) openEditMaterialModal(m)
+    },
+    [openEditMaterialModal]
+  )
+
+  const handleDeleteMaterialById = useCallback(
+    (id) => {
+      const m = materialsRef.current.find((x) => x.id === id)
+      if (m) void handleDeleteMaterial(m)
+    },
+    [handleDeleteMaterial]
+  )
+
+  const handleToggleMaterialById = useCallback(
+    (id) => {
+      const m = materialsRef.current.find((x) => x.id === id)
+      if (m) void handleMaterialBadgeToggle(m)
+    },
+    [handleMaterialBadgeToggle]
+  )
+
+  /** POST /api/user/save-calculation — čuva ceo proračun i usklađuje lokalne ID-jeve sa serverom */
   const handleSacuvajProracun = async () => {
     const email = localStorage.getItem('userEmail')
     if (!email) return
@@ -544,7 +757,7 @@ export default function KalkulatorAdministrativnihTroskova({
           .join(' - ') || 'Administrativni troškovi'
 
       const materialsPayload = materials.map(
-        ({ name, unit, quantity, unitPrice, total, categoryId, status }) => ({
+        ({ name, unit, quantity, unitPrice, total, categoryId, status, imageUrl }) => ({
           name,
           unit,
           quantity,
@@ -552,6 +765,7 @@ export default function KalkulatorAdministrativnihTroskova({
           total,
           category: categoryId || 'ostalo',
           status: status === 'Plaćeno' ? 'Plaćeno' : 'U planu',
+          imageUrl: imageUrl || '',
         })
       )
 
@@ -559,7 +773,7 @@ export default function KalkulatorAdministrativnihTroskova({
         email,
         title,
         totalAmount: ukupnoProjekat,
-        items: troskovi,
+        items: itemsPayloadForSave,
         materials: materialsPayload,
         location: municipality || '',
       })
@@ -587,35 +801,11 @@ export default function KalkulatorAdministrativnihTroskova({
         Kalkulator administrativnih troškova
       </h2>
 
-      {/* Sticky summary — svi iznosi u RSD */}
-      <div className="sticky top-0 z-30 -mx-4 sm:mx-0 mb-8 rounded-b-2xl border border-slate-200/80 bg-white/95 px-4 py-4 shadow-md backdrop-blur-md sm:rounded-2xl">
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 sm:gap-4">
-            <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-center sm:text-left">
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                Ukupno administrativno
-              </p>
-              <p className="mt-1 text-lg font-bold tabular-nums text-slate-900 sm:text-xl">
-                {formatRsd(adminFinance.total)}
-              </p>
-            </div>
-            <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-center sm:text-left">
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-emerald-800">
-                Plaćeno
-              </p>
-              <p className="mt-1 text-lg font-bold tabular-nums text-emerald-900 sm:text-xl">
-                {formatRsd(adminFinance.placeno)}
-              </p>
-            </div>
-            <div className="rounded-xl border border-amber-200 bg-gradient-to-br from-amber-50 to-red-50/40 px-4 py-3 text-center sm:text-left ring-1 ring-amber-200/80">
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-amber-900">
-                Preostalo
-              </p>
-              <p className="mt-1 text-lg font-bold tabular-nums text-red-900 sm:text-xl">
-                {formatRsd(adminFinance.preostalo)}
-              </p>
-            </div>
-        </div>
-      </div>
+      <SummaryDashboard
+        total={adminFinance.total}
+        paid={adminFinance.paid}
+        pending={adminFinance.pending}
+      />
 
       <div className="space-y-6 mb-8">
         <div>
@@ -686,90 +876,15 @@ export default function KalkulatorAdministrativnihTroskova({
         </button>
       </div>
 
-      {addAdminModalOpen && (
-        <Modal onClose={closeAdminModal} panelClassName="max-w-lg">
-          <div className="pr-8">
-            <h4 className="text-lg font-bold text-slate-900 mb-1">
-              {editingAdminItemId ? 'Izmeni trošak' : 'Novi administrativni trošak'}
-            </h4>
-            <p className="text-sm text-slate-500 mb-5">Iznos unesite u RSD.</p>
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1.5">Kategorija</label>
-                <select
-                  value={adminDraft.categoryId}
-                  onChange={(e) =>
-                    setAdminDraft((d) => ({ ...d, categoryId: e.target.value }))
-                  }
-                  className={inputClasses}
-                >
-                  {ADMIN_COST_CATEGORIES.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1.5">Naziv troška</label>
-                <input
-                  type="text"
-                  value={adminDraft.name}
-                  onChange={(e) => setAdminDraft((d) => ({ ...d, name: e.target.value }))}
-                  placeholder="npr. Geodetski elaborat"
-                  className={inputClasses}
-                  autoComplete="off"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1.5">Iznos (RSD)</label>
-                <input
-                  type="number"
-                  min="0"
-                  step="any"
-                  value={adminDraft.amount}
-                  onChange={(e) => setAdminDraft((d) => ({ ...d, amount: e.target.value }))}
-                  placeholder="0"
-                  className={inputClasses}
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1.5">Status</label>
-                <select
-                  value={adminDraft.status}
-                  onChange={(e) =>
-                    setAdminDraft((d) => ({
-                      ...d,
-                      status: e.target.value === 'Plaćeno' ? 'Plaćeno' : 'U planu',
-                    }))
-                  }
-                  className={inputClasses}
-                >
-                  <option value="U planu">U planu</option>
-                  <option value="Plaćeno">Plaćeno</option>
-                </select>
-              </div>
-              <div className="flex flex-col-reverse sm:flex-row gap-3 pt-2">
-                <button
-                  type="button"
-                  onClick={closeAdminModal}
-                  className="flex-1 min-h-[48px] rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50"
-                >
-                  Otkaži
-                </button>
-                <button
-                  type="button"
-                  onClick={handleSubmitAdmin}
-                  disabled={!!adminSyncingId}
-                  className="flex-1 min-h-[48px] rounded-xl bg-slate-800 px-4 py-3 text-sm font-semibold text-white hover:bg-slate-900 disabled:opacity-60"
-                >
-                  {editingAdminItemId ? 'Sačuvaj izmene' : 'Dodaj'}
-                </button>
-              </div>
-            </div>
-          </div>
-        </Modal>
-      )}
+      <AddEditModal
+        variant="admin"
+        open={addAdminModalOpen}
+        onClose={closeAdminModal}
+        editingId={editingAdminItemId}
+        initialValues={adminModalInitialValues}
+        onSubmit={handleSubmitAdmin}
+        submitDisabled={!!adminSyncingId}
+      />
 
       <div className="space-y-3 mb-8">
         {adminByCategory.map(({ id, label, lines, groupTotal }) => (
@@ -792,78 +907,30 @@ export default function KalkulatorAdministrativnihTroskova({
                   Nema stavki u ovoj kategoriji.
                 </p>
               ) : (
-                lines.map((line) => (
-                  <div key={`${line.source}-${line.id}`} className={itemCardClass}>
-                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                      <div className="min-w-0 flex-1">
-                        <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
-                          Naziv troška
-                        </p>
-                        <h4 className="font-semibold text-slate-900 leading-snug">{line.label}</h4>
-                      </div>
-                      <div className="shrink-0 w-full sm:w-auto sm:min-w-[160px]">
-                        <label className="sr-only" htmlFor={`adm-status-${line.id}`}>
-                          Status
-                        </label>
-                        <select
-                          id={`adm-status-${line.id}`}
-                          value={line.status}
-                          onChange={(e) => {
-                            const v = e.target.value === 'Plaćeno' ? 'Plaćeno' : 'U planu'
-                            if (line.source === 'template') {
-                              handleTemplateStatusChange(line.id, v)
-                            } else {
-                              handleCustomAdminStatusChange(line.id, v)
-                            }
-                          }}
-                          className={statusSelectClass}
-                        >
-                          <option value="U planu">U planu</option>
-                          <option value="Plaćeno">Plaćeno</option>
-                        </select>
-                      </div>
-                    </div>
-                    <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-3">
-                      <div>
-                        <p className="text-xs text-slate-500 uppercase tracking-wide">Iznos</p>
-                        <p className="text-lg font-bold text-slate-900 tabular-nums">
-                          {formatRsd(line.amountRsd)}
-                        </p>
-                      </div>
-                      <span
-                        className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold ${
-                          line.status === 'Plaćeno'
-                            ? 'bg-emerald-100 text-emerald-900 border border-emerald-200'
-                            : 'bg-amber-50 text-amber-900 border border-amber-200'
-                        }`}
-                      >
-                        {line.status === 'Plaćeno' ? 'Plaćeno' : 'U planu'}
-                      </span>
-                      {line.source === 'custom' && (
-                        <div className="flex flex-wrap items-center gap-2">
-                          <button
-                            type="button"
-                            onClick={() => openEditAdminModal(line)}
-                            disabled={!!adminSyncingId}
-                            className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
-                          >
-                            <Pencil className="h-4 w-4 shrink-0" strokeWidth={2} aria-hidden />
-                            Izmeni
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleRemoveCustomAdmin(line.id)}
-                            disabled={!!adminSyncingId}
-                            className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50 hover:text-red-800 disabled:opacity-50"
-                          >
-                            <Trash2 className="h-4 w-4 shrink-0" strokeWidth={2} aria-hidden />
-                            Ukloni
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                ))
+                lines.map((line) =>
+                  line.source === 'template' ? (
+                    <AdminTemplateLineCard
+                      key={`template-${line.id}`}
+                      lineId={line.id}
+                      label={line.label}
+                      amountRsd={line.amountRsd}
+                      status={line.status}
+                      onStatusChange={handleTemplateStatusChange}
+                    />
+                  ) : (
+                    <CostCard
+                      key={`custom-${line.id}`}
+                      lineId={line.id}
+                      label={line.label}
+                      amountRsd={line.amountRsd}
+                      status={line.status}
+                      isSyncing={!!adminSyncingId}
+                      onStatusToggle={handleCustomAdminStatusChange}
+                      onEdit={handleCustomAdminEditById}
+                      onDelete={handleCustomAdminDeleteById}
+                    />
+                  )
+                )
               )}
             </div>
           </details>
@@ -909,7 +976,7 @@ export default function KalkulatorAdministrativnihTroskova({
             <p className="text-xl font-bold text-slate-800 tabular-nums">
               {formatRsd(ukupno)}
             </p>
-            {materialsTotal > 0 && (
+            {materialsFinance.total > 0 && (
               <>
                 <p className="text-xs text-slate-500 pt-2 border-t border-blue-200">
                   Ukupno projekat (admin + materijal)
@@ -937,7 +1004,7 @@ export default function KalkulatorAdministrativnihTroskova({
               Ukupno projektovano
             </p>
             <p className="text-2xl font-bold text-slate-900 tabular-nums">
-              {formatRsd(materialsFinance.ukupnoProjektovano)}
+              {formatRsd(materialsFinance.total)}
             </p>
           </div>
           <div className="rounded-xl border border-emerald-200 bg-emerald-50/90 p-4 sm:p-5 shadow-sm">
@@ -945,7 +1012,7 @@ export default function KalkulatorAdministrativnihTroskova({
               Realizovano
             </p>
             <p className="text-2xl font-bold text-emerald-900 tabular-nums">
-              {formatRsd(materialsFinance.realizovano)}
+              {formatRsd(materialsFinance.paid)}
             </p>
             <p className="text-[11px] text-emerald-800/70 mt-1">Suma stavki sa statusom „Plaćeno“</p>
           </div>
@@ -954,7 +1021,7 @@ export default function KalkulatorAdministrativnihTroskova({
               Preostalo za plaćanje
             </p>
             <p className="text-2xl font-bold text-amber-950 tabular-nums">
-              {formatRsd(materialsFinance.preostalo)}
+              {formatRsd(materialsFinance.pending)}
             </p>
           </div>
         </div>
@@ -965,120 +1032,15 @@ export default function KalkulatorAdministrativnihTroskova({
           </button>
         </div>
 
-        {addMaterialModalOpen && (
-          <Modal onClose={closeMaterialModal} panelClassName="max-w-lg">
-            <div className="pr-8">
-              <h4 className="text-lg font-bold text-slate-900 mb-1">
-                {editingMaterialId ? 'Izmeni stavku' : 'Dodaj stavku'}
-              </h4>
-              <p className="text-sm text-slate-500 mb-5">
-                {editingMaterialId
-                  ? 'Izmenite podatke i sačuvajte.'
-                  : 'Unesite podatke za materijal ili radove.'}
-              </p>
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1.5">Kategorija</label>
-                  <select
-                    value={materialDraft.categoryId}
-                    onChange={(e) =>
-                      setMaterialDraft((d) => ({ ...d, categoryId: e.target.value }))
-                    }
-                    className={inputClasses}
-                  >
-                    {MATERIAL_CATEGORIES.map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1.5">Naziv</label>
-                  <input
-                    type="text"
-                    value={materialDraft.name}
-                    onChange={(e) => setMaterialDraft((d) => ({ ...d, name: e.target.value }))}
-                    placeholder="npr. Cement, elektro instalacija"
-                    className={inputClasses}
-                    autoComplete="off"
-                  />
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-1.5">Jedinica</label>
-                    <input
-                      type="text"
-                      value={materialDraft.unit}
-                      onChange={(e) => setMaterialDraft((d) => ({ ...d, unit: e.target.value }))}
-                      placeholder="t, m², kom"
-                      className={inputClasses}
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-1.5">Količina</label>
-                    <input
-                      type="number"
-                      min="0"
-                      step="any"
-                      value={materialDraft.quantity}
-                      onChange={(e) => setMaterialDraft((d) => ({ ...d, quantity: e.target.value }))}
-                      placeholder="0"
-                      className={inputClasses}
-                    />
-                  </div>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1.5">
-                    Jedinična cena (RSD)
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    step="any"
-                    value={materialDraft.unitPrice}
-                    onChange={(e) => setMaterialDraft((d) => ({ ...d, unitPrice: e.target.value }))}
-                    placeholder="0"
-                    className={inputClasses}
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1.5">Status</label>
-                  <select
-                    value={materialDraft.status}
-                    onChange={(e) =>
-                      setMaterialDraft((d) => ({
-                        ...d,
-                        status: e.target.value === 'Plaćeno' ? 'Plaćeno' : 'U planu',
-                      }))
-                    }
-                    className={inputClasses}
-                  >
-                    <option value="U planu">U planu</option>
-                    <option value="Plaćeno">Plaćeno</option>
-                  </select>
-                </div>
-                <div className="flex flex-col-reverse sm:flex-row gap-3 pt-2">
-                  <button
-                    type="button"
-                    onClick={closeMaterialModal}
-                    className="flex-1 min-h-[48px] rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50 transition-colors"
-                  >
-                    Otkaži
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleSubmitMaterial}
-                    disabled={!!materialSyncingId}
-                    className="flex-1 min-h-[48px] rounded-xl bg-slate-800 px-4 py-3 text-sm font-semibold text-white hover:bg-slate-900 transition-colors disabled:opacity-60"
-                  >
-                    {editingMaterialId ? 'Sačuvaj izmene' : 'Dodaj stavku'}
-                  </button>
-                </div>
-              </div>
-            </div>
-          </Modal>
-        )}
+        <AddEditModal
+          variant="material"
+          open={addMaterialModalOpen}
+          onClose={closeMaterialModal}
+          editingId={editingMaterialId}
+          initialValues={materialModalInitialValues}
+          onSubmit={handleSubmitMaterial}
+          submitDisabled={!!materialSyncingId}
+        />
 
         {materials.length === 0 ? (
           <div className="rounded-2xl border-2 border-dashed border-slate-200 bg-slate-50/50 px-6 py-12 text-center mb-6">
@@ -1110,71 +1072,14 @@ export default function KalkulatorAdministrativnihTroskova({
                     </p>
                   ) : (
                     items.map((m) => (
-                      <div key={m.id} className={itemCardClass}>
-                        <div className="min-w-0">
-                          <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
-                            Naziv stavke
-                          </p>
-                          <h4 className="font-semibold text-slate-900 leading-snug">{m.name}</h4>
-                        </div>
-                        <dl className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2 text-sm">
-                          <div className="flex justify-between gap-2 sm:block">
-                            <dt className="text-slate-500">Količina</dt>
-                            <dd className="font-medium text-slate-800 tabular-nums text-right sm:text-left">
-                              {Number(m.quantity).toLocaleString('sr-RS')}{' '}
-                              <span className="text-slate-600 font-normal">
-                                {m.unit ? m.unit : ''}
-                              </span>
-                            </dd>
-                          </div>
-                          <div className="flex justify-between gap-2 sm:block">
-                            <dt className="text-slate-500">Jed. cena</dt>
-                            <dd className="font-medium tabular-nums text-slate-800 text-right sm:text-left">
-                              {formatRsd(Number(m.unitPrice))}
-                            </dd>
-                          </div>
-                        </dl>
-                        <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-3">
-                          <div>
-                            <p className="text-xs text-slate-500 uppercase tracking-wide">Ukupno</p>
-                            <p className="text-lg font-bold text-slate-900 tabular-nums">
-                              {formatRsd(Number(m.total))}
-                            </p>
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => handleMaterialBadgeToggle(m)}
-                            disabled={!!materialSyncingId}
-                            className={`inline-flex min-h-[44px] items-center rounded-full px-3 py-2 text-xs font-semibold transition-opacity hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-sky-500 disabled:opacity-50 ${
-                              m.status === 'Plaćeno'
-                                ? 'bg-emerald-100 text-emerald-900 border border-emerald-200'
-                                : 'bg-amber-50 text-amber-900 border border-amber-200'
-                            }`}
-                          >
-                            {m.status === 'Plaćeno' ? 'Plaćeno' : 'U planu'}
-                          </button>
-                          <div className="flex shrink-0 flex-wrap items-center gap-2">
-                            <button
-                              type="button"
-                              onClick={() => openEditMaterialModal(m)}
-                              disabled={!!materialSyncingId}
-                              className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
-                            >
-                              <Pencil className="h-4 w-4 shrink-0" strokeWidth={2} aria-hidden />
-                              Izmeni
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => handleDeleteMaterial(m)}
-                              disabled={!!materialSyncingId}
-                              className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50 hover:text-red-800 disabled:opacity-50"
-                            >
-                              <Trash2 className="h-4 w-4 shrink-0" strokeWidth={2} aria-hidden />
-                              Ukloni
-                            </button>
-                          </div>
-                        </div>
-                      </div>
+                      <MaterialLineCard
+                        key={m.id}
+                        item={m}
+                        isSyncing={!!materialSyncingId}
+                        onEdit={handleMaterialEditById}
+                        onDelete={handleDeleteMaterialById}
+                        onToggle={handleToggleMaterialById}
+                      />
                     ))
                   )}
                 </div>
@@ -1193,7 +1098,7 @@ export default function KalkulatorAdministrativnihTroskova({
             <li className="flex justify-between gap-4">
               <span className="text-slate-600">Materijal i radovi</span>
               <span className="font-semibold tabular-nums">
-                {formatRsd(materialsTotal)}
+                {formatRsd(materialsFinance.total)}
               </span>
             </li>
             <li className="flex justify-between gap-4 pt-2 border-t border-sky-200 text-base">

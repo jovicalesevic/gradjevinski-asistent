@@ -8,6 +8,7 @@ const adminItemSchema = new mongoose.Schema(
     iznos: { type: Number, required: true },
     category: { type: String, default: '' },
     status: { type: String, enum: ['U planu', 'Plaćeno'], default: 'U planu' },
+    imageUrl: { type: String, default: '' },
   },
   { _id: true }
 );
@@ -21,6 +22,7 @@ const materialSchema = new mongoose.Schema(
     total: { type: Number, required: true },
     category: { type: String, default: 'ostalo' },
     status: { type: String, enum: ['U planu', 'Plaćeno'], default: 'U planu' },
+    imageUrl: { type: String, default: '' },
   },
   { _id: true }
 );
