@@ -5,6 +5,7 @@ import autoTable from 'jspdf-autotable'
 import html2canvas from 'html2canvas'
 import { PieChart, Pie, Cell, ResponsiveContainer, Legend } from 'recharts'
 import { API_USER_BASE } from '../config/api.js'
+import { getCategoryLabel } from '../data/materialCategories.js'
 
 const CHART_COLORS = ['#0088FE', '#00C49F', '#D35400', '#8884d8']
 
@@ -160,16 +161,23 @@ const generatePDF = async (calculation, userEmail, chartImageBase64 = null) => {
     let currentY = doc.lastAutoTable?.finalY ?? 38
 
     if (materials.length > 0) {
-      const matBody = materials.map((m) => [
-        text(String(m.name || '')),
-        text(String(m.unit || '—')),
-        Number(m.quantity ?? 0).toLocaleString('sr-RS'),
-        Number(m.unitPrice ?? 0).toLocaleString('sr-RS'),
-        Number(m.total ?? 0).toLocaleString('sr-RS'),
-      ])
+      const matBody = materials.map((m) => {
+        const status = m.status === 'Plaćeno' ? 'Plaćeno' : 'U planu'
+        return [
+          text(String(m.name || '')),
+          text(getCategoryLabel(m.category || m.categoryId || 'ostalo')),
+          text(status),
+          text(String(m.unit || '—')),
+          Number(m.quantity ?? 0).toLocaleString('sr-RS'),
+          Number(m.unitPrice ?? 0).toLocaleString('sr-RS'),
+          Number(m.total ?? 0).toLocaleString('sr-RS'),
+        ]
+      })
       const matSum = sumMaterialsLines(calculation)
       matBody.push([
         text('Ukupno materijal'),
+        '',
+        '',
         '',
         '',
         '',
@@ -178,18 +186,30 @@ const generatePDF = async (calculation, userEmail, chartImageBase64 = null) => {
       currentY += 8
       autoTable(doc, {
         startY: currentY,
-        head: [[text('Materijal'), text('Jm'), text('Kol.'), text('Cena'), text('Ukupno')]],
+        head: [
+          [
+            text('Materijal'),
+            text('Kategorija'),
+            text('Status'),
+            text('Jm'),
+            text('Kol.'),
+            text('Cena'),
+            text('Ukupno'),
+          ],
+        ],
         body: matBody,
         theme: 'grid',
-        styles: { font: fontName, fontStyle: 'normal', fontSize: 8 },
+        styles: { font: fontName, fontStyle: 'normal', fontSize: 7 },
         headStyles: { fillColor: [100, 116, 139], font: fontName, fontStyle: 'normal' },
         bodyStyles: { font: fontName, fontStyle: 'normal' },
         columnStyles: {
-          0: { cellWidth: 55, font: fontName },
-          1: { cellWidth: 18, font: fontName },
-          2: { cellWidth: 22, halign: 'right', font: fontName },
-          3: { cellWidth: 28, halign: 'right', font: fontName },
-          4: { cellWidth: 32, halign: 'right', font: fontName },
+          0: { cellWidth: 38, overflow: 'linebreak', font: fontName },
+          1: { cellWidth: 26, font: fontName },
+          2: { cellWidth: 18, font: fontName },
+          3: { cellWidth: 12, font: fontName },
+          4: { cellWidth: 16, halign: 'right', font: fontName },
+          5: { cellWidth: 22, halign: 'right', font: fontName },
+          6: { cellWidth: 26, halign: 'right', font: fontName },
         },
         margin: { left: margin, right: margin },
         didParseCell: (data) => {
@@ -688,10 +708,12 @@ export default function SavedCalculations({ isLoggedIn, refreshTrigger = 0 }) {
                             Materijal i radovi
                           </h4>
                           <div className="rounded-lg border border-slate-200 bg-white overflow-hidden overflow-x-auto">
-                            <table className="w-full text-sm min-w-[480px]">
+                            <table className="w-full text-sm min-w-[640px]">
                               <thead>
                                 <tr className="bg-slate-100 border-b border-slate-200">
                                   <th className="px-3 py-2.5 text-left font-semibold text-slate-700">Naziv</th>
+                                  <th className="px-3 py-2.5 text-left font-semibold text-slate-700">Kategorija</th>
+                                  <th className="px-3 py-2.5 text-left font-semibold text-slate-700">Status</th>
                                   <th className="px-3 py-2.5 text-left font-semibold text-slate-700">Jm</th>
                                   <th className="px-3 py-2.5 text-right font-semibold text-slate-700">Kol.</th>
                                   <th className="px-3 py-2.5 text-right font-semibold text-slate-700">Cena</th>
@@ -705,6 +727,12 @@ export default function SavedCalculations({ isLoggedIn, refreshTrigger = 0 }) {
                                     className={idx % 2 === 0 ? 'bg-white' : 'bg-slate-50/50'}
                                   >
                                     <td className="px-3 py-2.5 text-slate-700">{m.name}</td>
+                                    <td className="px-3 py-2.5 text-slate-600">
+                                      {getCategoryLabel(m.category || m.categoryId || 'ostalo')}
+                                    </td>
+                                    <td className="px-3 py-2.5 text-slate-700">
+                                      {m.status === 'Plaćeno' ? 'Plaćeno' : 'U planu'}
+                                    </td>
                                     <td className="px-3 py-2.5 text-slate-600">{m.unit || '—'}</td>
                                     <td className="px-3 py-2.5 text-right tabular-nums">
                                       {Number(m.quantity ?? 0).toLocaleString('sr-RS')}
@@ -720,7 +748,7 @@ export default function SavedCalculations({ isLoggedIn, refreshTrigger = 0 }) {
                               </tbody>
                               <tfoot>
                                 <tr className="bg-slate-100 border-t-2 border-slate-200">
-                                  <td colSpan={4} className="px-3 py-2.5 font-semibold text-slate-800">
+                                  <td colSpan={6} className="px-3 py-2.5 font-semibold text-slate-800">
                                     Ukupno materijal
                                   </td>
                                   <td className="px-3 py-2.5 text-right font-bold text-slate-800 tabular-nums">

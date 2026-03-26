@@ -111,12 +111,17 @@ router.post('/save-calculation', async (req, res) => {
         const quantity = Number(m.quantity) || 0;
         const unitPrice = Number(m.unitPrice) || 0;
         const lineTotal = Number(m.total) || quantity * unitPrice;
+        const rawCat = String(m.category || m.categoryId || '').trim();
+        const status =
+          m.status === 'Plaćeno' || m.status === 'U planu' ? m.status : 'U planu';
         return {
           name: String(m.name).trim(),
           unit: String(m.unit || '').trim(),
           quantity,
           unitPrice,
           total: lineTotal,
+          category: rawCat || 'ostalo',
+          status,
         };
       });
 

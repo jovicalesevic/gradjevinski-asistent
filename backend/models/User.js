@@ -8,6 +8,8 @@ const materialSchema = new mongoose.Schema(
     quantity: { type: Number, required: true },
     unitPrice: { type: Number, required: true },
     total: { type: Number, required: true },
+    category: { type: String, default: 'ostalo' },
+    status: { type: String, enum: ['U planu', 'Plaćeno'], default: 'U planu' },
   },
   { _id: false }
 );
